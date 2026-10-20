@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Recursive directory processing with `-r` / `--recursive`, deterministic traversal, and exclusion of directory symlinks and nested output directories.
+
 ## [0.0.1] - 2026-10-20
 
 ### Added

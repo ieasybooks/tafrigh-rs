@@ -33,6 +33,10 @@ pub struct Args {
     #[arg(required = true, value_name = "INPUT")]
     pub inputs: Vec<String>,
 
+    /// Include media in subdirectories. Directory symlinks are not followed.
+    #[arg(short = 'r', long)]
+    pub recursive: bool,
+
     /// Hide progress bars.
     #[arg(short, long)]
     pub quiet: bool,
@@ -336,6 +340,15 @@ mod tests {
         );
         assert_eq!(args.inputs, ["lecture.mp3"]);
         assert!(!args.output.words);
+        assert!(!args.recursive);
+    }
+
+    #[test]
+    fn parses_recursive_flags() {
+        for flag in ["-r", "--recursive"] {
+            let args = Args::try_parse_from(["tafrigh", "-w", "token", flag, "media/"]).unwrap();
+            assert!(args.recursive);
+        }
     }
 
     #[test]

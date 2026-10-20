@@ -81,6 +81,7 @@ async fn run(args: Args, ui: &Ui) -> anyhow::Result<ExitCode> {
             .with_decoder(decoder);
 
     let tafrigh = Tafrigh::builder(transcriber)
+        .recursive(args.recursive)
         .output(output)
         .ytdlp(ytdlp)
         .skip_existing(args.output.skip_existing)

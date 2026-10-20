@@ -33,8 +33,11 @@ tafrigh lecture.mp3                           # every format, into the current f
 tafrigh lectures/ -o transcripts -f srt,txt   # all media files in a folder
 tafrigh "https://www.youtube.com/playlist?list=…" --skip-existing
 tafrigh lecture.mp3 -f srt --words            # also lecture.words.srt, one cue per word
+tafrigh lectures/ -r -o transcripts             # include nested folders
 tafrigh lectures/ --merge                     # about 2× faster, see below
 ```
+
+Directories are scanned one level deep by default. Use `-r` / `--recursive` to include subdirectories. Recursive discovery skips directory symlinks and an output directory nested inside an input directory.
 
 Outputs are named `<name>.<format>` and go to `-o` (default: the current folder). Run `tafrigh --help` for every option.
 

@@ -11,7 +11,7 @@ use tokio::sync::Notify;
 
 use crate::event::{Event, ItemInfo, Progress, TranscribeEvent};
 use crate::output::{OutputWriter, SampleReservoir, SampleRow, write_sample};
-use crate::source::{Input, Media, MediaItem, YtDlp, expand_local};
+use crate::source::{Input, Media, MediaItem, YtDlp, discover_local};
 use crate::{Error, ErrorChain, Result, Segment, Transcriber};
 
 /// Transcribes inputs (files, folders, URLs) and writes transcripts.
@@ -37,6 +37,7 @@ pub struct Tafrigh {
     transcriber: Arc<dyn Transcriber>,
     output: OutputWriter,
     ytdlp: YtDlp,
+    recursive: bool,
     skip_existing: bool,
     sample: usize,
 }
@@ -46,6 +47,7 @@ impl std::fmt::Debug for Tafrigh {
         f.debug_struct("Tafrigh")
             .field("output", &self.output)
             .field("ytdlp", &self.ytdlp)
+            .field("recursive", &self.recursive)
             .field("skip_existing", &self.skip_existing)
             .field("sample", &self.sample)
             .finish_non_exhaustive()
@@ -57,6 +59,7 @@ pub struct TafrighBuilder {
     transcriber: Arc<dyn Transcriber>,
     output: OutputWriter,
     ytdlp: Option<YtDlp>,
+    recursive: bool,
     skip_existing: bool,
     sample: usize,
 }
@@ -90,6 +93,7 @@ impl std::fmt::Debug for TafrighBuilder {
         f.debug_struct("TafrighBuilder")
             .field("output", &self.output)
             .field("ytdlp", &self.ytdlp)
+            .field("recursive", &self.recursive)
             .field("skip_existing", &self.skip_existing)
             .field("sample", &self.sample)
             .finish_non_exhaustive()
@@ -108,6 +112,14 @@ impl TafrighBuilder {
     #[must_use]
     pub fn ytdlp(mut self, ytdlp: YtDlp) -> Self {
         self.ytdlp = Some(ytdlp);
+        self
+    }
+
+    /// Include nested directories when resolving local inputs. Defaults to false.
+    /// Directory symlinks and a nested output directory are not traversed.
+    #[must_use]
+    pub fn recursive(mut self, recursive: bool) -> Self {
+        self.recursive = recursive;
         self
     }
 
@@ -134,6 +146,7 @@ impl TafrighBuilder {
             transcriber: self.transcriber,
             output: self.output,
             ytdlp,
+            recursive: self.recursive,
             skip_existing: self.skip_existing,
             sample: self.sample,
         }
@@ -193,6 +206,7 @@ impl Tafrigh {
             transcriber: Arc::new(transcriber),
             output: OutputWriter::new("."),
             ytdlp: None,
+            recursive: false,
             skip_existing: false,
             sample: 0,
         }
@@ -203,9 +217,13 @@ impl Tafrigh {
         match input {
             Input::Path(path) => {
                 let path = path.clone();
-                tokio::task::spawn_blocking(move || expand_local(&path))
-                    .await
-                    .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))
+                let recursive = self.recursive;
+                let excluded = self.output.dir().to_owned();
+                tokio::task::spawn_blocking(move || {
+                    discover_local(&path, recursive, Some(&excluded))
+                })
+                .await
+                .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))
             }
             Input::Url(url) => self.ytdlp.resolve(url).await,
         }

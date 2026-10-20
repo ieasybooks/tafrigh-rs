@@ -9,13 +9,14 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
+pub(crate) use local::discover_local;
 pub use local::{MEDIA_EXTENSIONS, expand_local, is_media_path};
 pub use ytdlp::YtDlp;
 
 /// Something to transcribe, as given by the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
-    /// A media file, or a folder whose media files are transcribed (non-recursively).
+    /// A media file, or a folder of media files (recursive discovery is opt-in).
     Path(PathBuf),
     /// A URL handled by yt-dlp (videos, playlists, channels).
     Url(String),

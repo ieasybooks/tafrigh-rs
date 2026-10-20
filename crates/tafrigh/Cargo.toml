@@ -30,6 +30,7 @@ tract-onnx = { workspace = true, optional = true }
 
 [dev-dependencies]
 base64.workspace = true
+tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 
 [lints]
