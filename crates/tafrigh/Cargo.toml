@@ -1,0 +1,36 @@
+[package]
+name = "tafrigh"
+description = "Transcribe audio and video into subtitles and text: streaming decoding, Silero VAD chunking and pluggable speech recognizers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories = ["multimedia::audio", "text-processing"]
+include = ["src/**", "assets/**", "tests/**", "Cargo.toml", "LICENSE"]
+
+[features]
+default = ["silero"]
+## Silero VAD v6 segmenter running on tract (pure Rust ONNX inference).
+silero = ["dep:tract-onnx"]
+
+[dependencies]
+async-trait.workspace = true
+csv.workspace = true
+futures.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "sync", "process", "fs"] }
+tracing.workspace = true
+tract-onnx = { workspace = true, optional = true }
+
+[dev-dependencies]
+base64.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

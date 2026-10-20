@@ -1,0 +1,30 @@
+[package]
+name = "tafrigh-wit"
+description = "Wit.ai speech recognizer for tafrigh: rate-limited, multi-token, with retries and word timings."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories = ["multimedia::audio", "api-bindings"]
+
+[dependencies]
+tafrigh.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+wiremock.workspace = true
+
+[lints]
+workspace = true
