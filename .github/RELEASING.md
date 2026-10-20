@@ -1,0 +1,13 @@
+# Releasing
+
+All three crates share one version and one `vX.Y.Z` tag. Use [Conventional Commits](https://github.com/googleapis/release-please): `fix:` bumps the patch version, `feat:` bumps the minor version, and `feat!:` or a `BREAKING CHANGE:` footer marks incompatible changes. Before 1.0, breaking changes also bump the minor version. The current feature stack therefore proposes 0.1.0 from 0.0.1. Keep the same convention in squash-merge titles and preserve breaking-change footers.
+
+After changes reach `main`, release-please opens or updates one release PR. Review that PR's version, lockfile, changelog, and checks. Add user-facing notes to `CHANGELOG.md` under `Unreleased` as part of feature and fix PRs; the release workflow promotes those notes to a dated release without wrapping Markdown or changing the Keep a Changelog structure. Empty release notes fail preparation so they can be filled in before merging.
+
+Merging the release PR creates the GitHub release and dispatches the existing binary-build and crates.io workflows on the new tag. Ordinary feature PRs do not publish packages. The existing `release` environment and crates.io trusted publisher configuration still apply. Manual runs of the build and publish workflows remain checks only by default; to retry publishing, select the release tag and enable the `publish` input.
+
+The workflow uses the repository's `GITHUB_TOKEN`; no additional personal token is needed. GitHub's **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** setting must be enabled. If GitHub requests approval for checks on a bot-created release PR, approve those workflow runs before merging.
+
+release-please's Rust updater does not support inherited workspace versions (`version.workspace = true`). Its supported `simple` strategy tracks the automation version in `.github/version.txt`, and TOML extra-file updates change the shared Cargo version and both internal dependency requirements. Cargo updates the lockfile with `cargo update --workspace`. `.release-please-manifest.json` records the release baseline. Review these version files together in every release PR; package manifests continue inheriting the workspace version.
+
+The workflow explicitly dispatches publishing because a release created with `GITHUB_TOKEN` does not trigger release-event workflows. See [GitHub's workflow trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow) and [release-please's TOML configuration](https://github.com/googleapis/release-please/blob/main/docs/customizing.md#updating-arbitrary-toml-files).

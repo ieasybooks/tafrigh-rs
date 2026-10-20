@@ -1,0 +1,69 @@
+name: Release please
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      # Also find an unchanged PR, so a rerun can finish a previously interrupted preparation.
+      - name: Find the release PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main \
+            --head release-please--branches--main --state open \
+            --json headRefName,isCrossRepository \
+            --jq '.[] | select(.isCrossRepository == false) | .headRefName')
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: steps.pr.outputs.branch != ''
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          fetch-depth: 0
+      - name: Complete the release PR
+        if: steps.pr.outputs.branch != ''
+        env:
+          RELEASE_BRANCH: ${{ steps.pr.outputs.branch }}
+        run: |
+          rustup toolchain install
+          cargo update --workspace
+          python3 .github/scripts/prepare_release.py
+          if ! git diff --quiet -- Cargo.lock CHANGELOG.md; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add Cargo.lock CHANGELOG.md
+            git commit -m 'chore: prepare release artifacts'
+            git push origin "HEAD:$RELEASE_BRANCH"
+          fi
+      # Releases created with GITHUB_TOKEN do not trigger release-event workflows.
+      # Dispatch on the tag so the existing release environment and trusted publishing apply.
+      - name: Build and publish the new release
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG" -f publish=true
+          gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG" -f publish=true

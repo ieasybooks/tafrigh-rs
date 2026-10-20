@@ -10,6 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Recursive directory processing with `-r` / `--recursive`, deterministic traversal, and exclusion of directory symlinks and nested output directories.
 - `--output-mode side-by-side`, `tree-to-tree`, and `flat`, with one mirrored tree for all formats, separate folders for multiple input roots, and flat URL outputs in tree mode.
+- Automated release PRs with release-please, one shared version for all crates, and tagged binary and crates.io publishing after the release PR is merged.
 
 ### Changed
 
