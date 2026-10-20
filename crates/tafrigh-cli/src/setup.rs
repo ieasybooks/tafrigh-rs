@@ -19,10 +19,12 @@ use crate::cli::{self, FormatChoice, Output, Segmentation, Tools, Wit};
 impl Output {
     /// The output writer for these options.
     pub fn writer(&self) -> anyhow::Result<OutputWriter> {
-        Ok(OutputWriter::new(&self.dir)
-            .formats(self.formats()?)
-            .min_words(self.min_words)
-            .keep_uncompacted(self.keep_uncompacted))
+        Ok(
+            OutputWriter::new(self.dir.as_deref().unwrap_or_else(|| Path::new(".")))
+                .formats(self.formats()?)
+                .min_words(self.min_words)
+                .keep_uncompacted(self.keep_uncompacted),
+        )
     }
 
     /// Selected formats in order, without duplicates, plus word-level ones with `--words`.

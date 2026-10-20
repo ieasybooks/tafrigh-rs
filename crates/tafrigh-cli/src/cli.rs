@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, Parser, ValueEnum};
 use tafrigh::output::BuiltinFormat;
 
 /// The --help footer. Keep in sync with the exit codes in main.rs.
@@ -62,14 +62,13 @@ pub struct Args {
 #[derive(Debug, clap::Args)]
 #[command(next_help_heading = "Output")]
 pub struct Output {
-    /// Directory for transcripts.
-    #[arg(
-        short = 'o',
-        long = "output-dir",
-        value_name = "DIR",
-        default_value = "."
-    )]
-    pub dir: PathBuf,
+    /// Directory for transcripts; selects tree-to-tree mode unless --output-mode is given.
+    #[arg(short = 'o', long = "output-dir", value_name = "DIR")]
+    pub dir: Option<PathBuf>,
+
+    /// Destination layout [default: side-by-side without -o, tree-to-tree with -o].
+    #[arg(long = "output-mode", value_enum, value_name = "MODE")]
+    pub mode: Option<OutputMode>,
 
     /// Output formats, comma-separated: txt, srt, vtt, csv, tsv, json, all, or word-level
     /// words-srt, words-vtt, words-csv, words-tsv, words-json.
@@ -100,9 +99,42 @@ pub struct Output {
     #[arg(long)]
     pub skip_existing: bool,
 
-    /// Write sample.csv with this many random segments for spot-checking.
+    /// Write sample.csv with this many random segments (-o, or the current directory in side-by-side mode).
     #[arg(long, value_name = "N", default_value_t = 0)]
     pub sample: usize,
+}
+
+/// Value of --output-mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum OutputMode {
+    /// Write beside each local or downloaded media file; cannot be used with -o.
+    SideBySide,
+    /// Mirror input folders in -o, keeping multiple roots separate; URLs go flat.
+    TreeToTree,
+    /// Put all transcripts directly in -o.
+    Flat,
+}
+
+impl Output {
+    /// Resolve and validate the destination mode before any tools or network requests.
+    pub fn mode(&self) -> Result<tafrigh::output::OutputMode, clap::Error> {
+        use clap::error::ErrorKind;
+        use tafrigh::output::OutputMode as Mode;
+
+        match (self.mode, self.dir.is_some()) {
+            (Some(OutputMode::SideBySide), true) => Err(Args::command().error(
+                ErrorKind::ArgumentConflict,
+                "--output-mode side-by-side cannot be used with --output-dir",
+            )),
+            (Some(OutputMode::TreeToTree | OutputMode::Flat), false) => Err(Args::command().error(
+                ErrorKind::MissingRequiredArgument,
+                "--output-mode tree-to-tree and flat require --output-dir",
+            )),
+            (Some(OutputMode::SideBySide) | None, false) => Ok(Mode::SideBySide),
+            (Some(OutputMode::TreeToTree) | None, true) => Ok(Mode::TreeToTree),
+            (Some(OutputMode::Flat), true) => Ok(Mode::Flat),
+        }
+    }
 }
 
 /// A value of `--format`.
@@ -274,7 +306,7 @@ pub struct Tools {
     #[arg(long, value_name = "ARGS", allow_hyphen_values = true)]
     pub yt_dlp_args: Option<String>,
 
-    /// Where downloaded audio goes [default: the output directory].
+    /// Where downloaded audio goes [default: -o, or the current directory].
     #[arg(long, value_name = "DIR")]
     pub download_dir: Option<PathBuf>,
 
@@ -348,6 +380,38 @@ mod tests {
         for flag in ["-r", "--recursive"] {
             let args = Args::try_parse_from(["tafrigh", "-w", "token", flag, "media/"]).unwrap();
             assert!(args.recursive);
+        }
+    }
+
+    #[test]
+    fn output_mode_defaults_and_constraints() {
+        use tafrigh::output::OutputMode as Mode;
+        for (flags, expected) in [
+            (vec![], Ok(Mode::SideBySide)),
+            (vec!["-o", "out"], Ok(Mode::TreeToTree)),
+            (vec!["--output-mode", "side-by-side"], Ok(Mode::SideBySide)),
+            (
+                vec!["--output-mode", "tree-to-tree", "-o", "out"],
+                Ok(Mode::TreeToTree),
+            ),
+            (vec!["--output-mode", "flat", "-o", "out"], Ok(Mode::Flat)),
+            (
+                vec!["--output-mode", "side-by-side", "-o", "out"],
+                Err(clap::error::ErrorKind::ArgumentConflict),
+            ),
+            (
+                vec!["--output-mode", "tree-to-tree"],
+                Err(clap::error::ErrorKind::MissingRequiredArgument),
+            ),
+            (
+                vec!["--output-mode", "flat"],
+                Err(clap::error::ErrorKind::MissingRequiredArgument),
+            ),
+        ] {
+            let mut argv = vec!["tafrigh", "-w", "token", "media"];
+            argv.extend(flags);
+            let parsed = Args::try_parse_from(argv).unwrap();
+            assert_eq!(parsed.output.mode().map_err(|err| err.kind()), expected);
         }
     }
 

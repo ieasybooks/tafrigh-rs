@@ -2,6 +2,7 @@
 
 mod compact;
 mod format;
+mod layout;
 mod sample;
 
 use std::io::Write;
@@ -10,6 +11,8 @@ use std::sync::Arc;
 
 pub use compact::compact;
 pub use format::{BuiltinFormat, Format, format_timestamp};
+pub use layout::OutputMode;
+pub(crate) use layout::{Layout, Target, unique_name};
 pub use sample::{SampleReservoir, SampleRow, write_sample};
 
 use crate::{Error, Result, Segment};
@@ -76,6 +79,13 @@ impl OutputWriter {
     /// The output directory.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Use another directory with the same formats and compaction settings.
+    #[must_use]
+    pub fn in_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.dir = dir.into();
+        self
     }
 
     /// Every file [`write`](Self::write) produces for `id`.

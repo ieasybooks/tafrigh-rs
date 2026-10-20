@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
+use tafrigh::output::OutputMode;
 use tafrigh::source::Input;
 use tafrigh::{ChunkedTranscriber, Event, Tafrigh};
 use tafrigh_wit::WitRecognizer;
@@ -27,6 +28,7 @@ const EXIT_INTERRUPTED: u8 = 130;
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    let output_mode = args.output.mode().unwrap_or_else(|err| err.exit());
     let ui = Arc::new(Ui::new(args.quiet));
     init_logging(args.verbose, &ui);
 
@@ -36,7 +38,7 @@ fn main() -> ExitCode {
         .expect("tokio runtime");
     let result = runtime.block_on(async {
         tokio::select! {
-            result = run(args, &ui) => result,
+            result = run(args, output_mode, &ui) => result,
             _ = tokio::signal::ctrl_c() => {
                 ui.clear();
                 eprintln!("interrupted");
@@ -54,7 +56,7 @@ fn main() -> ExitCode {
     })
 }
 
-async fn run(args: Args, ui: &Ui) -> anyhow::Result<ExitCode> {
+async fn run(args: Args, output_mode: OutputMode, ui: &Ui) -> anyhow::Result<ExitCode> {
     let inputs: Vec<Input> = args
         .inputs
         .iter()
@@ -62,11 +64,11 @@ async fn run(args: Args, ui: &Ui) -> anyhow::Result<ExitCode> {
         .map(Input::parse)
         .collect();
     // Before anything touches the network, so a missing program fails fast.
+    let output = args.output.writer()?;
     let decoder = args.tools.decoder();
-    let ytdlp = args.tools.ytdlp(&args.output.dir)?;
+    let ytdlp = args.tools.ytdlp(output.dir())?;
     setup::check_tools(&decoder, inputs.iter().any(Input::is_url).then_some(&ytdlp)).await?;
 
-    let output = args.output.writer()?;
     let segmenter = args.segmentation.segmenter()?;
     let recognizer = WitRecognizer::new(args.wit.config(args.segmentation.request_seconds()))
         .await
@@ -83,6 +85,7 @@ async fn run(args: Args, ui: &Ui) -> anyhow::Result<ExitCode> {
     let tafrigh = Tafrigh::builder(transcriber)
         .recursive(args.recursive)
         .output(output)
+        .output_mode(output_mode)
         .ytdlp(ytdlp)
         .skip_existing(args.output.skip_existing)
         .sample(args.output.sample)

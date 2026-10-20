@@ -3,14 +3,16 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use tokio::sync::Notify;
 
 use crate::event::{Event, ItemInfo, Progress, TranscribeEvent};
-use crate::output::{OutputWriter, SampleReservoir, SampleRow, write_sample};
+use crate::output::{
+    Layout, OutputMode, OutputWriter, SampleReservoir, SampleRow, Target, unique_name, write_sample,
+};
 use crate::source::{Input, Media, MediaItem, YtDlp, discover_local};
 use crate::{Error, ErrorChain, Result, Segment, Transcriber};
 
@@ -36,6 +38,7 @@ use crate::{Error, ErrorChain, Result, Segment, Transcriber};
 pub struct Tafrigh {
     transcriber: Arc<dyn Transcriber>,
     output: OutputWriter,
+    output_mode: OutputMode,
     ytdlp: YtDlp,
     recursive: bool,
     skip_existing: bool,
@@ -46,6 +49,7 @@ impl std::fmt::Debug for Tafrigh {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Tafrigh")
             .field("output", &self.output)
+            .field("output_mode", &self.output_mode)
             .field("ytdlp", &self.ytdlp)
             .field("recursive", &self.recursive)
             .field("skip_existing", &self.skip_existing)
@@ -58,6 +62,7 @@ impl std::fmt::Debug for Tafrigh {
 pub struct TafrighBuilder {
     transcriber: Arc<dyn Transcriber>,
     output: OutputWriter,
+    output_mode: OutputMode,
     ytdlp: Option<YtDlp>,
     recursive: bool,
     skip_existing: bool,
@@ -92,6 +97,7 @@ impl std::fmt::Debug for TafrighBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TafrighBuilder")
             .field("output", &self.output)
+            .field("output_mode", &self.output_mode)
             .field("ytdlp", &self.ytdlp)
             .field("recursive", &self.recursive)
             .field("skip_existing", &self.skip_existing)
@@ -105,6 +111,15 @@ impl TafrighBuilder {
     #[must_use]
     pub fn output(mut self, output: OutputWriter) -> Self {
         self.output = output;
+        self
+    }
+
+    /// How transcripts are placed. Defaults to [`OutputMode::Flat`].
+    /// In side-by-side mode the writer's directory is ignored, and `sample.csv` goes in
+    /// the current directory. Tree mode separates multiple directory inputs by root name.
+    #[must_use]
+    pub fn output_mode(mut self, mode: OutputMode) -> Self {
+        self.output_mode = mode;
         self
     }
 
@@ -139,12 +154,17 @@ impl TafrighBuilder {
 
     /// Finishes configuration.
     pub fn build(self) -> Tafrigh {
-        let ytdlp = self
-            .ytdlp
-            .unwrap_or_else(|| YtDlp::new(self.output.dir().to_owned()));
+        let ytdlp = self.ytdlp.unwrap_or_else(|| {
+            YtDlp::new(if self.output_mode == OutputMode::SideBySide {
+                std::path::Path::new(".")
+            } else {
+                self.output.dir()
+            })
+        });
         Tafrigh {
             transcriber: self.transcriber,
             output: self.output,
+            output_mode: self.output_mode,
             ytdlp,
             recursive: self.recursive,
             skip_existing: self.skip_existing,
@@ -205,6 +225,7 @@ impl Tafrigh {
         TafrighBuilder {
             transcriber: Arc::new(transcriber),
             output: OutputWriter::new("."),
+            output_mode: OutputMode::default(),
             ytdlp: None,
             recursive: false,
             skip_existing: false,
@@ -218,9 +239,10 @@ impl Tafrigh {
             Input::Path(path) => {
                 let path = path.clone();
                 let recursive = self.recursive;
-                let excluded = self.output.dir().to_owned();
+                let excluded = (self.output_mode != OutputMode::SideBySide)
+                    .then(|| self.output.dir().to_owned());
                 tokio::task::spawn_blocking(move || {
-                    discover_local(&path, recursive, Some(&excluded))
+                    discover_local(&path, recursive, excluded.as_deref())
                 })
                 .await
                 .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))
@@ -245,17 +267,19 @@ impl Tafrigh {
         events: &dyn Progress<Event>,
     ) -> Result<RunReport> {
         let mut report = RunReport::default();
+        let inputs: Vec<_> = inputs.into_iter().collect();
+        let layout = Layout::new(
+            self.output_mode,
+            self.output.clone(),
+            &inputs,
+            self.sample > 0,
+        )?;
         let mut queue = Queue {
-            inputs: inputs.into_iter().collect(),
+            inputs: inputs.into(),
             items: VecDeque::new(),
             used_ids: HashSet::new(),
-            reserved_paths: HashSet::new(),
+            layout: Arc::new(Mutex::new(layout)),
         };
-        if self.sample > 0 {
-            queue
-                .reserved_paths
-                .insert(path_key(&self.output.dir().join("sample.csv")));
-        }
         let mut samples = SampleReservoir::new(self.sample);
 
         let mut running = FuturesUnordered::new();
@@ -272,12 +296,13 @@ impl Tafrigh {
                 match self.next_item(&mut queue, events, &mut report).await? {
                     Some(next) => {
                         let work = self.start_item(next, &queue, events, &mut prefetched);
+                        let active = work.sent.is_some();
                         if let Some(sent) = work.sent {
                             transcribing += 1;
                             newest = Some(sent);
                         }
                         let (order, done) = (started, work.done);
-                        running.push(async move { (order, done.await) });
+                        running.push(async move { (order, active, done.await) });
                         started += 1;
                         continue;
                     }
@@ -286,17 +311,17 @@ impl Tafrigh {
             }
             let signal = newest.clone();
             tokio::select! {
-                Some((order, done)) = running.next() => {
+                Some((order, active, done)) = running.next() => {
                     let done: Done = done;
-                    if !matches!(done.outcome, Outcome::Skipped) {
+                    if active {
                         transcribing -= 1;
                     }
                     finished.insert(order, done);
                     while let Some(done) = finished.remove(&reported) {
                         reported += 1;
                         let status =
-                            self.finish_item(&done.item, &done.info, done.outcome, events, &mut samples)?;
-                        report.items.push(ItemReport { item: done.info, status });
+                            self.finish_item(&done.queued, done.outcome, events, &mut samples)?;
+                        report.items.push(ItemReport { item: done.queued.info, status });
                     }
                 }
                 () = async {
@@ -311,7 +336,7 @@ impl Tafrigh {
 
         if self.sample > 0 {
             write_sample(
-                &self.output.dir().join("sample.csv"),
+                &queue.layout.lock().unwrap().sample_path,
                 samples.rows(),
                 self.sample,
             )?;
@@ -355,15 +380,18 @@ impl Tafrigh {
                 items: items.len(),
             });
             let total = items.len();
-            for (position, mut item) in items.into_iter().enumerate() {
-                item.id = unique_id(
-                    &mut queue.used_ids,
-                    &mut queue.reserved_paths,
-                    &self.output,
-                    &item.id,
-                );
+            let mut layout = queue.layout.lock().unwrap();
+            let root = layout.input_root(&input);
+            for (position, item) in items.into_iter().enumerate() {
+                let info = ItemInfo {
+                    id: unique_name(&item.id, |id| queue.used_ids.insert(Arc::from(id))).into(),
+                    title: item.title.clone(),
+                };
+                let output = layout.plan(&item, root.as_ref())?;
                 queue.items.push_back(Queued {
                     item,
+                    info,
+                    output,
                     position: position + 1,
                     total,
                 });
@@ -375,59 +403,60 @@ impl Tafrigh {
     /// (or does nothing when its outputs exist). Also starts downloading the item after it.
     fn start_item<'a>(
         &'a self,
-        next: Queued,
+        mut next: Queued,
         queue: &Queue,
         events: &'a dyn Progress<Event>,
         prefetched: &mut Option<(Arc<str>, PrefetchedDownload)>,
     ) -> Started<'a> {
-        let Queued {
-            item,
-            position,
-            total,
-        } = next;
-        let info = ItemInfo {
-            id: item.id.clone(),
-            title: item.title.clone(),
-        };
         events.report(Event::ItemStarted {
-            item: info.clone(),
-            position,
-            total,
+            item: next.info.clone(),
+            position: next.position,
+            total: next.total,
         });
-        let download = prefetched.take().and_then(|(id, download)| {
+        let mut download = prefetched.take().and_then(|(id, download)| {
             // A prefetch for any other item is dropped, which cancels it.
-            (id == item.id).then_some(download)
+            (id == next.info.id).then_some(download)
         });
-        if self.skip_existing && self.output.exists(&item.id) {
+        if let Some(following) = queue.items.front() {
+            *prefetched = self
+                .prefetch_download(following)
+                .map(|download| (following.info.id.clone(), download));
+        }
+        if self.skip_existing && next.output.as_ref().is_some_and(Target::exists) {
             return Started {
                 done: Box::pin(std::future::ready(Done {
-                    item,
-                    info,
+                    queued: next,
                     outcome: Outcome::Skipped,
                 })),
                 sent: None,
             };
         }
-        if let Some(following) = queue.items.front() {
-            *prefetched = self
-                .prefetch_download(&following.item)
-                .map(|download| (following.item.id.clone(), download));
-        }
         let sent = Arc::new(Notify::new());
         let signal = sent.clone();
+        let layout = queue.layout.clone();
         let done = Box::pin(async move {
-            let outcome = match self
-                .transcribe_item(&item, &info, events, download, &signal)
-                .await
-            {
-                Ok((path, segments)) => Outcome::Transcribed { path, segments },
+            let prepared = self
+                .prepare_target(&mut next, &layout, events, &mut download)
+                .await;
+            let outcome = match prepared {
                 Err(err) => Outcome::Failed(err),
+                Ok(())
+                    if self.skip_existing && next.output.as_ref().is_some_and(Target::exists) =>
+                {
+                    Outcome::Skipped
+                }
+                Ok(()) => match self
+                    .transcribe_item(&next.item, &next.info, events, download, &signal)
+                    .await
+                {
+                    Ok((path, segments)) => Outcome::Transcribed { path, segments },
+                    Err(err) => Outcome::Failed(err),
+                },
             };
             // Also when it failed before sending everything: the next item may start.
             signal.notify_one();
             Done {
-                item,
-                info,
+                queued: next,
                 outcome,
             }
         });
@@ -437,14 +466,33 @@ impl Tafrigh {
         }
     }
 
-    fn prefetch_download(&self, item: &MediaItem) -> Option<PrefetchedDownload> {
-        if !matches!(item.media, Media::Remote { .. })
-            || (self.skip_existing && self.output.exists(&item.id))
+    /// Side-by-side URLs follow yt-dlp's actual path, including custom output templates.
+    /// Plan before transcription, so subsequent items claim their names in input order.
+    async fn prepare_target(
+        &self,
+        next: &mut Queued,
+        layout: &Mutex<Layout>,
+        events: &dyn Progress<Event>,
+        download: &mut Option<PrefetchedDownload>,
+    ) -> Result<()> {
+        if next.output.is_none() {
+            let path = self
+                .media_path(&next.item, &next.info, events, download.take())
+                .await?;
+            next.output = Some(layout.lock().unwrap().downloaded(&path)?);
+            next.item.media = Media::File(path);
+        }
+        Ok(())
+    }
+
+    fn prefetch_download(&self, next: &Queued) -> Option<PrefetchedDownload> {
+        if !matches!(next.item.media, Media::Remote { .. })
+            || (self.skip_existing && next.output.as_ref().is_some_and(Target::exists))
         {
             return None;
         }
         let ytdlp = self.ytdlp.clone();
-        let item = item.clone();
+        let item = next.item.clone();
         Some(PrefetchedDownload(Some(tokio::spawn(async move {
             ytdlp.download(&item).await
         }))))
@@ -460,16 +508,7 @@ impl Tafrigh {
         download: Option<PrefetchedDownload>,
         sent: &Notify,
     ) -> Result<(PathBuf, Vec<Segment>)> {
-        let path = match &item.media {
-            Media::File(path) => path.clone(),
-            Media::Remote { .. } => {
-                events.report(Event::Downloading { item: info.clone() });
-                match download {
-                    Some(download) => download.wait().await?,
-                    None => self.ytdlp.download(item).await?,
-                }
-            }
-        };
+        let path = self.media_path(item, info, events, download).await?;
         let progress = |event: TranscribeEvent| {
             if matches!(event, TranscribeEvent::Segmented { .. }) {
                 sent.notify_one();
@@ -483,16 +522,35 @@ impl Tafrigh {
         Ok((path, segments))
     }
 
+    async fn media_path(
+        &self,
+        item: &MediaItem,
+        info: &ItemInfo,
+        events: &dyn Progress<Event>,
+        download: Option<PrefetchedDownload>,
+    ) -> Result<PathBuf> {
+        Ok(match &item.media {
+            Media::File(path) => path.clone(),
+            Media::Remote { .. } => {
+                events.report(Event::Downloading { item: info.clone() });
+                match download {
+                    Some(download) => download.wait().await?,
+                    None => self.ytdlp.download(item).await?,
+                }
+            }
+        })
+    }
+
     /// Writes a transcribed item and reports how it went; only errors that should stop the
     /// whole run are returned.
     fn finish_item(
         &self,
-        item: &MediaItem,
-        info: &ItemInfo,
+        next: &Queued,
         outcome: Outcome,
         events: &dyn Progress<Event>,
         samples: &mut SampleReservoir,
     ) -> Result<ItemStatus> {
+        let info = &next.info;
         let written = match outcome {
             Outcome::Skipped => {
                 events.report(Event::ItemSkipped {
@@ -502,7 +560,7 @@ impl Tafrigh {
                 return Ok(ItemStatus::Skipped);
             }
             Outcome::Transcribed { path, segments } => self
-                .write_item(item, &path, &segments, samples)
+                .write_item(next, &path, &segments, samples)
                 .map(|outputs| (segments.len(), outputs)),
             Outcome::Failed(err) => Err(err),
         };
@@ -530,27 +588,31 @@ impl Tafrigh {
     /// Writes an item's transcripts and adds its segments to the sample; returns the files.
     fn write_item(
         &self,
-        item: &MediaItem,
+        next: &Queued,
         path: &std::path::Path,
         segments: &[Segment],
         samples: &mut SampleReservoir,
     ) -> Result<Vec<PathBuf>> {
-        if self.output.needs_words()
+        let output = next
+            .output
+            .as_ref()
+            .expect("destination planned before transcription");
+        if output.writer.needs_words()
             && !segments.is_empty()
             && segments.iter().all(|s| s.words.is_empty())
         {
             tracing::warn!(
                 "{}: the recognizer returned no word timings; word-level files will be empty",
-                item.id
+                next.info.id
             );
         }
-        let written = self.output.write(&item.id, segments)?;
+        let written = output.writer.write(&output.name, segments)?;
         if self.sample > 0 {
             for segment in written.segments {
                 samples.push(SampleRow {
                     segment,
-                    item: item.id.to_string(),
-                    link: item.link.clone(),
+                    item: next.info.id.to_string(),
+                    link: next.item.link.clone(),
                     file: Some(path.to_owned()),
                 });
             }
@@ -567,12 +629,14 @@ struct Queue {
     inputs: VecDeque<Input>,
     items: VecDeque<Queued>,
     used_ids: HashSet<Arc<str>>,
-    reserved_paths: HashSet<String>,
+    layout: Arc<Mutex<Layout>>,
 }
 
 /// An item waiting to start, with its place in its input.
 struct Queued {
     item: MediaItem,
+    info: ItemInfo,
+    output: Option<Target>,
     position: usize,
     total: usize,
 }
@@ -585,8 +649,7 @@ struct Started<'a> {
 
 /// An item whose work is over, waiting for its turn to be written and reported.
 struct Done {
-    item: MediaItem,
-    info: ItemInfo,
+    queued: Queued,
     outcome: Outcome,
 }
 
@@ -597,39 +660,6 @@ enum Outcome {
         segments: Vec<Segment>,
     },
     Failed(Error),
-}
-
-/// Makes `id` unique within a run by appending `-2`, `-3`, … on collisions.
-fn unique_id(
-    used: &mut HashSet<Arc<str>>,
-    reserved_paths: &mut HashSet<String>,
-    output: &OutputWriter,
-    id: &Arc<str>,
-) -> Arc<str> {
-    let mut n = 1;
-    loop {
-        let candidate: Arc<str> = if n == 1 {
-            id.clone()
-        } else {
-            Arc::from(format!("{id}-{n}"))
-        };
-        let paths = output.outputs(&candidate);
-        if !used.contains(&candidate)
-            && paths
-                .iter()
-                .map(|path| path_key(path))
-                .all(|path| !reserved_paths.contains(&path))
-        {
-            used.insert(candidate.clone());
-            reserved_paths.extend(paths.iter().map(|path| path_key(path)));
-            return candidate;
-        }
-        n += 1;
-    }
-}
-
-fn path_key(path: &std::path::Path) -> String {
-    path.to_string_lossy().to_lowercase()
 }
 
 #[cfg(test)]
@@ -999,60 +1029,5 @@ printf '%s\n' "$path"
         );
         assert!(out.join("c_10.txt").exists());
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn ids_are_made_unique() {
-        let mut used = HashSet::new();
-        let mut reserved = HashSet::new();
-        let output = OutputWriter::new(".");
-        let ids: Vec<Arc<str>> = ["a", "a", "a-2", "a"]
-            .into_iter()
-            .map(|id| unique_id(&mut used, &mut reserved, &output, &Arc::from(id)))
-            .collect();
-        assert_eq!(
-            ids,
-            [Arc::from("a"), "a-2".into(), "a-2-2".into(), "a-3".into()]
-        );
-    }
-
-    #[test]
-    fn ids_reserve_all_output_paths_case_insensitively() {
-        let output = OutputWriter::new("out").formats([
-            Arc::new(crate::output::BuiltinFormat::Srt) as Arc<dyn crate::output::Format>,
-            Arc::new(crate::output::BuiltinFormat::WordsSrt) as Arc<dyn crate::output::Format>,
-        ]);
-        let mut used = HashSet::new();
-        let mut reserved = HashSet::new();
-        assert_eq!(
-            unique_id(&mut used, &mut reserved, &output, &Arc::from("foo")),
-            "foo".into()
-        );
-        assert_eq!(
-            unique_id(&mut used, &mut reserved, &output, &Arc::from("foo.words")),
-            "foo.words-2".into()
-        );
-        assert_eq!(
-            unique_id(&mut used, &mut reserved, &output, &Arc::from("Talk")),
-            "Talk".into()
-        );
-        assert_eq!(
-            unique_id(&mut used, &mut reserved, &output, &Arc::from("talk")),
-            "talk-2".into()
-        );
-    }
-
-    #[test]
-    fn sampling_reserves_sample_csv() {
-        let output = OutputWriter::new("out").formats([
-            Arc::new(crate::output::BuiltinFormat::Csv) as Arc<dyn crate::output::Format>,
-        ]);
-        let mut used = HashSet::new();
-        let mut reserved = HashSet::new();
-        reserved.insert(path_key(&output.dir().join("sample.csv")));
-        assert_eq!(
-            unique_id(&mut used, &mut reserved, &output, &Arc::from("sample")),
-            "sample-2".into()
-        );
     }
 }

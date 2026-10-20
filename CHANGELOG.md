@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Added
 
 - Recursive directory processing with `-r` / `--recursive`, deterministic traversal, and exclusion of directory symlinks and nested output directories.
+- `--output-mode side-by-side`, `tree-to-tree`, and `flat`, with one mirrored tree for all formats, separate folders for multiple input roots, and flat URL outputs in tree mode.
+
+### Changed
+
+- **Breaking:** CLI output defaults to beside each media file without `-o`, and a mirrored tree with `-o`. Use `--output-mode flat -o DIR` to retain the previous layout. Side-by-side rejects `-o`; tree-to-tree and flat require it.
+- Filename suffixes resolve collisions at the actual destination, so matching names in separate folders remain unchanged. Word-level, uncompacted, and skip-existing outputs follow the selected layout; a run-wide `sample.csv` goes in `-o`, or the current directory in side-by-side mode.
 
 ## [0.0.1] - 2026-10-20
 
