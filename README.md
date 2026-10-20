@@ -5,6 +5,7 @@ Transcribe audio and video into subtitles and text with [Wit.ai](https://wit.ai)
 - Works on files, folders, and anything [yt-dlp](https://github.com/yt-dlp/yt-dlp) can download (videos, playlists, channels).
 - Writes txt, srt, vtt, csv, tsv and json, with optional word-level timings.
 - Uses as many Wit tokens as you give it, and resumes interrupted runs with `--skip-existing`.
+- Includes shell completions, reusable argument files, and generated CLI reference documentation.
 
 ## Install
 
@@ -59,6 +60,80 @@ Names gain `-2`, `-3`, and so on when their destination files collide, ignoring 
 One sample CSV is written for the run, in `-o` or in the current directory for side-by-side mode. It uses `sample.csv`, or `sample-2.csv`, `sample-3.csv`, and so on when the path is needed by a transcript or directory.
 
 To retain the flat layout from version 0.0.1, pass `--output-mode flat -o DIR` (use `-o .` for the current directory). Run `tafrigh --help` for every option.
+
+### Help and shell completions
+
+The CLI uses [Usage](https://usage.jdx.dev/rust/). Transcription is the default command:
+`tafrigh lecture.mp3` and `tafrigh transcribe lecture.mp3` do the same thing.
+Use `-h` for brief help, `--help` for detailed help with examples, or read the
+[complete CLI reference](docs/cli.md). A [man page](docs/tafrigh.1) is also included
+in release archives (`man ./docs/tafrigh.1`). Help, completions and specification export
+work without Wit tokens or media tools.
+
+Generate a completion script or install it into your shell's user directory:
+
+```sh
+tafrigh completions zsh --install --dry-run  # show the destination and setup instructions
+tafrigh completions zsh --install           # install, then follow any printed instructions
+tafrigh completions bash > tafrigh.bash     # alternatively, save the script yourself
+```
+
+Supported shells: `bash`, `elvish`, `fish`, `nu` (Nushell), `powershell`, and `zsh`.
+Completions suggest flags, format and mode values, and files or directories where
+appropriate. The scripts call `tafrigh` directly, so completion does not require
+the standalone `usage` program. Installation updates scripts previously generated
+by Usage and refuses to overwrite unrelated files; it never edits shell startup files.
+
+### Reusable options and input lists
+
+Use `@FILE` to read arguments from a UTF-8 file. For example, save this as `arabic.args`:
+
+```text
+--wit-language ar
+--format srt,txt
+--merge
+--output-dir transcripts
+```
+
+Then run a batch with optional overrides:
+
+```sh
+tafrigh @arabic.args lectures/ -r
+tafrigh @arabic.args "lecture one.mp3" --output-dir another-folder
+```
+
+Files contain shell-style words: quotes preserve spaces, and `#` starts a comment.
+They can contain inputs as well as options, and include other argument files with
+`@relative/path.args`. Nested argument-file paths resolve beside the containing file;
+media and output paths resolve from the working directory. Cycles and nesting beyond
+16 files are rejected. Escape a literal leading `@` with `@@`, for example
+`tafrigh @@recording.wav`. These files are parsed as arguments; shell commands and
+environment-variable substitutions are not executed.
+
+Repeated scalar options use the last value, so command-line flags after an argument
+file override its settings. Repeated list options such as `--format` and `--wit-token`
+accumulate. Boolean transcription flags have a `--no-…` counterpart, so
+`tafrigh @arabic.args lecture.mp3 --no-merge` turns off merging from the preset.
+Unknown flags and invalid option combinations are rejected before
+transcription starts.
+
+You can also set `TAFRIGH_WIT_LANGUAGE`, `TAFRIGH_FFMPEG`, `TAFRIGH_FFPROBE`, and
+`TAFRIGH_YT_DLP`; explicit flags take precedence over these defaults. Keep tokens in
+`TAFRIGH_WIT_TOKENS` when using reusable option files. Token environment values are
+hidden from help and specification output.
+
+### CLI specification
+
+`tafrigh spec` (also available through Usage's `__usage_spec__` endpoint) prints a
+machine-readable KDL definition of commands, flags, examples, completion hints and
+exit codes. It is generated from the same Rust declarations as the parser. With the
+optional [Usage CLI](https://usage.jdx.dev/cli/), you can generate other artifacts:
+
+```sh
+tafrigh spec > tafrigh.usage.kdl
+usage generate markdown -f tafrigh.usage.kdl --out-file reference.md
+usage generate manpage -f tafrigh.usage.kdl > tafrigh.1
+```
 
 ### Tips
 
@@ -126,7 +201,12 @@ The root package is `tafrigh-cli`, with its source in `src/`. The `tafrigh` and 
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
+sh scripts/cli-docs.sh
 ```
+
+Regenerate `docs/cli.md` and `docs/tafrigh.1` after changing the CLI. The script uses
+the locked Usage library through a Cargo example; no standalone Usage installation
+is required. CI checks that the committed reference matches the current parser.
 
 The Silero test fixtures are committed. To regenerate them, see `crates/tafrigh/tests/fixtures/generate.py`.
 

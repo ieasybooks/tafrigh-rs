@@ -28,7 +28,7 @@ impl Output {
     }
 
     /// Selected formats in order, without duplicates, plus word-level ones with `--words`.
-    fn formats(&self) -> anyhow::Result<Vec<Arc<dyn Format>>> {
+    pub(super) fn formats(&self) -> anyhow::Result<Vec<Arc<dyn Format>>> {
         let mut formats: Vec<BuiltinFormat> = Vec::new();
         for choice in &self.formats {
             match choice {
@@ -217,15 +217,19 @@ fn describe_unavailable(err: &tafrigh::Error, note: &str, install: &str, flag: &
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
-
-    use crate::cli::Args;
+    use crate::cli::{Cli, Command};
 
     fn formats(flags: &[&str]) -> anyhow::Result<Vec<String>> {
         let mut argv = vec!["tafrigh", "-w", "t"];
         argv.extend_from_slice(flags);
         argv.push("x.mp3");
-        let parsed = Args::try_parse_from(argv).unwrap();
+        let argv: Vec<_> = argv.iter().map(std::ffi::OsStr::new).collect();
+        let Command::Transcribe(parsed) = Cli::try_parse_from(&argv)
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?
+            .command
+        else {
+            panic!("expected transcription");
+        };
         Ok(parsed
             .output
             .formats()?

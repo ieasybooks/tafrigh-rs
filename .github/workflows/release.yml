@@ -62,8 +62,9 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           name="tafrigh-$VERSION-$TARGET"
-          mkdir "$name"
+          mkdir -p "$name/docs"
           cp "target/$TARGET/release/tafrigh" README.md LICENSE "$name/"
+          cp docs/cli.md docs/tafrigh.1 "$name/docs/"
           tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
       - uses: actions/upload-artifact@v7
