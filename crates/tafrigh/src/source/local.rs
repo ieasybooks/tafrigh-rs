@@ -20,19 +20,39 @@ pub fn is_media_path(path: &Path) -> bool {
 
 /// A file becomes one item; a folder becomes its media files, sorted by name.
 pub fn expand_local(path: &Path) -> Result<Vec<MediaItem>> {
+    discover_local(path, false, None)
+}
+
+pub(crate) fn discover_local(
+    path: &Path,
+    recursive: bool,
+    excluded: Option<&Path>,
+) -> Result<Vec<MediaItem>> {
     let meta = std::fs::metadata(path)
         .map_err(|err| Error::Source(format!("{}: {err}", path.display())))?;
     if meta.is_file() {
         return Ok(vec![item(path)]);
     }
+    // A directory that does not exist yet cannot appear in this traversal.
+    let excluded = excluded.and_then(|dir| dir.canonicalize().ok());
     let mut files = Vec::new();
-    let entries = std::fs::read_dir(path)
-        .map_err(|err| Error::Source(format!("{}: {err}", path.display())))?;
-    for entry in entries {
-        let entry = entry.map_err(|err| Error::Source(format!("{}: {err}", path.display())))?;
-        let entry_path = entry.path();
-        if entry_path.is_file() && is_media_path(&entry_path) {
-            files.push(entry_path);
+    let mut directories = vec![path.to_owned()];
+    while let Some(dir) = directories.pop() {
+        let source_error = |err| Error::Source(format!("{}: {err}", dir.display()));
+        for entry in std::fs::read_dir(&dir).map_err(source_error)? {
+            let entry = entry.map_err(source_error)?;
+            let kind = entry.file_type().map_err(source_error)?;
+            let path = entry.path();
+            if recursive && kind.is_dir() {
+                if let Some(excluded) = &excluded
+                    && path.canonicalize().map_err(source_error)? == *excluded
+                {
+                    continue;
+                }
+                directories.push(path);
+            } else if is_media_path(&path) && path.is_file() {
+                files.push(path);
+            }
         }
     }
     files.sort();
@@ -51,5 +71,90 @@ fn item(path: &Path) -> MediaItem {
             .map(|name| Arc::from(name.to_string_lossy().as_ref())),
         link: None,
         media: Media::File(path.to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "z.mp3",
+            "a/02.MP4",
+            "a/deeper/01.wav",
+            "notes.txt",
+            "out/old.mp3",
+        ] {
+            let path = dir.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"").unwrap();
+        }
+        dir
+    }
+
+    fn paths(items: Vec<MediaItem>, root: &Path) -> Vec<std::path::PathBuf> {
+        items
+            .into_iter()
+            .map(|item| match item.media {
+                Media::File(path) => path.strip_prefix(root).unwrap().to_owned(),
+                Media::Remote { .. } => panic!("local discovery returned a URL"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shallow_by_default_and_recursive_in_path_order() {
+        let dir = fixture();
+        let root = dir.path();
+        assert_eq!(
+            paths(expand_local(root).unwrap(), root),
+            [Path::new("z.mp3")]
+        );
+        assert_eq!(
+            paths(discover_local(root, true, None).unwrap(), root),
+            ["a/02.MP4", "a/deeper/01.wav", "out/old.mp3", "z.mp3"].map(std::path::PathBuf::from),
+        );
+        // An explicitly supplied file still works, regardless of its extension.
+        assert_eq!(expand_local(&root.join("notes.txt")).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn excludes_nested_output_but_not_the_input_root() {
+        let dir = fixture();
+        let root = dir.path();
+        let items = discover_local(root, true, Some(&root.join("a/../out"))).unwrap();
+        assert_eq!(
+            paths(items, root),
+            ["a/02.MP4", "a/deeper/01.wav", "z.mp3"].map(std::path::PathBuf::from)
+        );
+        assert_eq!(discover_local(root, true, Some(root)).unwrap().len(), 4);
+        assert_eq!(
+            discover_local(root, true, Some(&root.join("new-output")))
+                .unwrap()
+                .len(),
+            4
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn does_not_follow_directory_symlinks() {
+        let dir = fixture();
+        let root = dir.path();
+        std::os::unix::fs::symlink(root, root.join("a/loop")).unwrap();
+        std::os::unix::fs::symlink(root.join("z.mp3"), root.join("linked.mp3")).unwrap();
+        let items = discover_local(root, true, None).unwrap();
+        assert_eq!(items.len(), 5);
+        assert!(items.iter().any(|item| &*item.id == "linked"));
+    }
+
+    #[test]
+    fn missing_inputs_report_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let error = discover_local(&missing, true, None).unwrap_err();
+        assert!(error.to_string().contains(&missing.display().to_string()));
     }
 }

@@ -1,6 +1,5 @@
 //! Integration tests against a mock Wit server.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -320,7 +319,7 @@ async fn detects_language_and_rejects_mixed_apps() {
 // ---- Full pipeline: real speech → Silero → Wit mock ---------------------------------------
 
 /// Writes the 11s speech fixture as a WAV file and returns its path.
-fn wav_fixture() -> PathBuf {
+fn wav_fixture() -> tempfile::TempPath {
     let pcm = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../tafrigh/tests/fixtures/short.s16le"
@@ -338,9 +337,11 @@ fn wav_fixture() -> PathBuf {
             .map(|&b| i16::from_le_bytes(b))
             .collect(),
     };
-    let dir = std::env::temp_dir().join(format!("tafrigh-wit-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("short.wav");
+    let path = tempfile::Builder::new()
+        .suffix(".wav")
+        .tempfile()
+        .unwrap()
+        .into_temp_path();
     std::fs::write(&path, chunk.wav_bytes()).unwrap();
     path
 }

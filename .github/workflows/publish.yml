@@ -1,11 +1,16 @@
 name: Publish to crates.io
 
 # Publishes the crates when a GitHub release is published, using crates.io trusted publishing.
-# Run it by hand to check the packages without publishing.
+# Manual runs check packages only, unless publishing is explicitly enabled on a release tag.
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish this release tag to crates.io
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,14 +27,14 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: Check the release tag matches the crate version
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.publish
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.ref_name }}
         run: |
           version=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "tafrigh-cli") | .version')
-          if [ "${TAG#v}" != "$version" ]; then
-            echo "::error::Release tag $TAG does not match the crate version $version"
+          if [ "$GITHUB_REF_TYPE" != tag ] || [ "$TAG" != "v$version" ]; then
+            echo "::error::Publishing requires the tag v$version"
             exit 1
           fi
       # Builds each crate from its package, as crates.io will (unlike a publish dry run, this
@@ -39,7 +44,7 @@ jobs:
   publish:
     name: Publish
     needs: check
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || inputs.publish
     runs-on: ubuntu-latest
     # Only this environment's deployments may publish; crates.io trusts this workflow in it.
     environment: release

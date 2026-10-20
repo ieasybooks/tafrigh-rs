@@ -1,0 +1,35 @@
+name: Release please
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+      # Releases created with GITHUB_TOKEN do not trigger release-event workflows.
+      # Dispatch on the tag so the existing release environment and trusted publishing apply.
+      - name: Build and publish the new release
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG" -f publish=true
+          gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG" -f publish=true

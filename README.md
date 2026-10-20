@@ -29,14 +29,36 @@ Create an app on [wit.ai](https://wit.ai) in the language you want to transcribe
 ```sh
 export TAFRIGH_WIT_TOKENS=TOKEN_A,TOKEN_B   # or pass -w TOKEN
 
-tafrigh lecture.mp3                           # every format, into the current folder
-tafrigh lectures/ -o transcripts -f srt,txt   # all media files in a folder
+tafrigh lecture.mp3                           # every format, beside the media file
+tafrigh lectures/ -o transcripts -f srt,txt    # mirror the input folder
 tafrigh "https://www.youtube.com/playlist?list=…" --skip-existing
 tafrigh lecture.mp3 -f srt --words            # also lecture.words.srt, one cue per word
+tafrigh lectures/ -r -o transcripts           # include nested folders
+tafrigh lectures/ -r -o transcripts --output-mode flat
 tafrigh lectures/ --merge                     # about 2× faster, see below
 ```
 
-Outputs are named `<name>.<format>` and go to `-o` (default: the current folder). Run `tafrigh --help` for every option.
+Directories are scanned one level deep by default. Use `-r` / `--recursive` to include subdirectories. Recursive discovery skips directory symlinks and an output directory nested inside an input directory.
+
+Outputs are named `<name>.<format>`. Choose their destination with `--output-mode`:
+
+| Mode | Destination | `-o` |
+|---|---|---|
+| `side-by-side` | Beside each local or downloaded media file | Rejected; this is the default without `-o` |
+| `tree-to-tree` | One mirrored tree with every format together | Required; this is the default with `-o` |
+| `flat` | Every transcript directly in the output folder | Required |
+
+For example, `tafrigh lectures/ -r -o out` writes `lectures/course/01.mp3` as `out/course/01.srt`. With multiple directory inputs, each root gets its own folder: `tafrigh lectures/ interviews/ -r -o out` writes under `out/lectures/` and `out/interviews/`. Roots with the same name get numeric suffixes. Individually supplied files and URL inputs go directly in `out` in tree mode.
+
+Downloads go to `--download-dir` when given, otherwise to `-o` or the current directory. Side-by-side URL transcripts follow the actual downloaded file's directory and basename, including custom yt-dlp output templates. In tree and flat modes, URL transcripts use the video ID.
+
+Names gain `-2`, `-3`, and so on when their destination files collide, ignoring case. Inputs are resolved before transcription so mirrored directories take precedence over conflicting transcript names. Files in different destination folders keep their names. The same placement applies to word-level and uncompacted outputs. An unusable item destination is reported as a failure while the remaining items continue.
+
+`--skip-existing` skips an item only when every requested output file exists, including word-level and uncompacted variants. If any requested file is missing, the item is transcribed again and its requested outputs are rewritten. Without `--skip-existing`, existing files at the selected destinations are overwritten. Skipping checks filenames only; it does not verify the source or contents. When resuming, keep the same inputs, order, and output settings. Changes to which colliding inputs are discovered or downloaded can change their numeric suffixes between runs.
+
+One sample CSV is written for the run, in `-o` or in the current directory for side-by-side mode. It uses `sample.csv`, or `sample-2.csv`, `sample-3.csv`, and so on when the path is needed by a transcript or directory.
+
+To retain the flat layout from version 0.0.1, pass `--output-mode flat -o DIR` (use `-o .` for the current directory). Run `tafrigh --help` for every option.
 
 ### Tips
 
@@ -79,7 +101,7 @@ let transcriber = ChunkedTranscriber::new(segmenter, recognizer, ChunkOptions::d
 let segments = transcriber.transcribe("lecture.mp3".as_ref(), &NoProgress).await?;
 ```
 
-To process files, folders and URLs into transcript files, use `tafrigh::Tafrigh::builder`.
+To process files, folders and URLs into transcript files, use `tafrigh::Tafrigh::builder`. The library retains flat output by default; use `.output_mode(tafrigh::output::OutputMode::TreeToTree)` or `SideBySide` to choose another layout, and `.recursive(true)` to include subdirectories.
 
 | Crate | What it is |
 |---|---|
@@ -98,6 +120,8 @@ To process files, folders and URLs into transcript files, use `tafrigh::Tafrigh:
 
 The Rust version is pinned in `rust-toolchain.toml`; rustup (or `mise install`) fetches it. The tests need ffmpeg.
 
+The root package is `tafrigh-cli`, with its source in `src/`. The `tafrigh` and `tafrigh-wit` libraries live under `crates/`. All three packages are workspace members and are selected by default when running Cargo from the root.
+
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
@@ -105,6 +129,8 @@ cargo fmt --all --check
 ```
 
 The Silero test fixtures are committed. To regenerate them, see `crates/tafrigh/tests/fixtures/generate.py`.
+
+For Conventional Commits, version bumps, and the release PR workflow, see [Releasing](.github/RELEASING.md).
 
 ## License
 
