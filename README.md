@@ -120,6 +120,8 @@ To process files, folders and URLs into transcript files, use `tafrigh::Tafrigh:
 
 The Rust version is pinned in `rust-toolchain.toml`; rustup (or `mise install`) fetches it. The tests need ffmpeg.
 
+The root package is `tafrigh-cli`, with its source in `src/`. The `tafrigh` and `tafrigh-wit` libraries live under `crates/`. All three packages are workspace members and are selected by default when running Cargo from the root.
+
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings

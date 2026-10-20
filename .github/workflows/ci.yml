@@ -20,6 +20,10 @@ jobs:
       # Installs the toolchain pinned in rust-toolchain.toml, with rustfmt and clippy.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - name: Check workspace package versions match
+        run: |
+          cargo metadata --no-deps --locked --format-version 1 \
+            | jq -e '([.packages[].version] | unique | length) == 1'
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # The end-to-end tests decode audio with ffmpeg.
