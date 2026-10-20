@@ -138,7 +138,7 @@ impl TafrighBuilder {
         self
     }
 
-    /// Skip items whose outputs all exist already.
+    /// Skip items when every requested output file already exists.
     #[must_use]
     pub fn skip_existing(mut self, skip: bool) -> Self {
         self.skip_existing = skip;
@@ -146,6 +146,7 @@ impl TafrighBuilder {
     }
 
     /// Write `sample.csv` with this many random segments from the run (0 disables).
+    /// Use a numeric suffix when its path belongs to a transcript or directory.
     #[must_use]
     pub fn sample(mut self, count: usize) -> Self {
         self.sample = count;
@@ -252,6 +253,8 @@ impl Tafrigh {
     }
 
     /// Processes all inputs in order.
+    /// Inputs are resolved before transcription so mirrored directories take precedence
+    /// over conflicting transcript file names.
     ///
     /// The next item starts transcribing once the current one has sent all of its audio, so its
     /// requests use the capacity the current one no longer needs while that one waits for its
@@ -268,18 +271,7 @@ impl Tafrigh {
     ) -> Result<RunReport> {
         let mut report = RunReport::default();
         let inputs: Vec<_> = inputs.into_iter().collect();
-        let layout = Layout::new(
-            self.output_mode,
-            self.output.clone(),
-            &inputs,
-            self.sample > 0,
-        )?;
-        let mut queue = Queue {
-            inputs: inputs.into(),
-            items: VecDeque::new(),
-            used_ids: HashSet::new(),
-            layout: Arc::new(Mutex::new(layout)),
-        };
+        let mut queue = self.prepare_queue(&inputs, events, &mut report).await?;
         let mut samples = SampleReservoir::new(self.sample);
 
         let mut running = FuturesUnordered::new();
@@ -293,7 +285,7 @@ impl Tafrigh {
         let mut exhausted = false;
         loop {
             if !exhausted && newest.is_none() && transcribing < MAX_TRANSCRIBING {
-                match self.next_item(&mut queue, events, &mut report).await? {
+                match queue.items.pop_front() {
                     Some(next) => {
                         let work = self.start_item(next, &queue, events, &mut prefetched);
                         let active = work.sent.is_some();
@@ -336,7 +328,7 @@ impl Tafrigh {
 
         if self.sample > 0 {
             write_sample(
-                &queue.layout.lock().unwrap().sample_path,
+                &queue.layout.lock().unwrap().sample_path()?,
                 samples.rows(),
                 self.sample,
             )?;
@@ -344,25 +336,21 @@ impl Tafrigh {
         Ok(report)
     }
 
-    /// The next item to process, resolving inputs as needed; `None` when all are done.
-    async fn next_item(
+    /// Resolve inputs and reserve every known parent directory before choosing file names.
+    async fn prepare_queue(
         &self,
-        queue: &mut Queue,
+        inputs: &[Input],
         events: &dyn Progress<Event>,
         report: &mut RunReport,
-    ) -> Result<Option<Queued>> {
-        loop {
-            if let Some(next) = queue.items.pop_front() {
-                return Ok(Some(next));
-            }
-            let Some(input) = queue.inputs.pop_front() else {
-                return Ok(None);
-            };
+    ) -> Result<Queue> {
+        let mut layout = Layout::new(self.output_mode, self.output.clone(), inputs);
+        let mut resolved = Vec::new();
+        for (index, input) in inputs.iter().enumerate() {
             let label = input.to_string();
             events.report(Event::InputResolving {
                 input: label.clone(),
             });
-            let items = match self.resolve(&input).await {
+            let items = match self.resolve(input).await {
                 Ok(items) => items,
                 Err(err @ Error::ToolUnavailable { .. }) => return Err(err),
                 Err(err) => {
@@ -380,23 +368,42 @@ impl Tafrigh {
                 items: items.len(),
             });
             let total = items.len();
-            let mut layout = queue.layout.lock().unwrap();
-            let root = layout.input_root(&input);
             for (position, item) in items.into_iter().enumerate() {
+                let directory = layout
+                    .directory(&item, index)
+                    .map(|dir| layout.require_directory(&dir))
+                    .transpose();
+                resolved.push((item, directory, position + 1, total));
+            }
+        }
+        let mut used_ids = HashSet::<Arc<str>>::new();
+        let items = resolved
+            .into_iter()
+            .map(|(item, directory, position, total)| {
                 let info = ItemInfo {
-                    id: unique_name(&item.id, |id| queue.used_ids.insert(Arc::from(id))).into(),
+                    id: unique_name(&item.id, |id| used_ids.insert(Arc::from(id))).into(),
                     title: item.title.clone(),
                 };
-                let output = layout.plan(&item, root.as_ref())?;
-                queue.items.push_back(Queued {
+                let planned =
+                    directory.and_then(|dir| dir.map(|dir| layout.plan(&item, &dir)).transpose());
+                let (output, planning_error) = match planned {
+                    Ok(output) => (output, None),
+                    Err(err) => (None, Some(err)),
+                };
+                Queued {
                     item,
                     info,
                     output,
-                    position: position + 1,
+                    planning_error,
+                    position,
                     total,
-                });
-            }
-        }
+                }
+            })
+            .collect();
+        Ok(Queue {
+            items,
+            layout: Arc::new(Mutex::new(layout)),
+        })
     }
 
     /// Reports `next` as started and returns its work, which downloads and transcribes it
@@ -421,6 +428,15 @@ impl Tafrigh {
             *prefetched = self
                 .prefetch_download(following)
                 .map(|download| (following.info.id.clone(), download));
+        }
+        if let Some(error) = next.planning_error.take() {
+            return Started {
+                done: Box::pin(std::future::ready(Done {
+                    queued: next,
+                    outcome: Outcome::Failed(error),
+                })),
+                sent: None,
+            };
         }
         if self.skip_existing && next.output.as_ref().is_some_and(Target::exists) {
             return Started {
@@ -486,7 +502,8 @@ impl Tafrigh {
     }
 
     fn prefetch_download(&self, next: &Queued) -> Option<PrefetchedDownload> {
-        if !matches!(next.item.media, Media::Remote { .. })
+        if next.planning_error.is_some()
+            || !matches!(next.item.media, Media::Remote { .. })
             || (self.skip_existing && next.output.as_ref().is_some_and(Target::exists))
         {
             return None;
@@ -550,7 +567,7 @@ impl Tafrigh {
         events: &dyn Progress<Event>,
         samples: &mut SampleReservoir,
     ) -> Result<ItemStatus> {
-        let info = &next.info;
+        let info = next.info.clone();
         let written = match outcome {
             Outcome::Skipped => {
                 events.report(Event::ItemSkipped {
@@ -606,7 +623,7 @@ impl Tafrigh {
                 next.info.id
             );
         }
-        let written = output.writer.write(&output.name, segments)?;
+        let written = output.write(segments)?;
         if self.sample > 0 {
             for segment in written.segments {
                 samples.push(SampleRow {
@@ -624,11 +641,9 @@ impl Tafrigh {
 /// Items that may transcribe at once.
 const MAX_TRANSCRIBING: usize = 2;
 
-/// Inputs not resolved yet and resolved items not started yet.
+/// Planned items not started yet.
 struct Queue {
-    inputs: VecDeque<Input>,
     items: VecDeque<Queued>,
-    used_ids: HashSet<Arc<str>>,
     layout: Arc<Mutex<Layout>>,
 }
 
@@ -637,6 +652,7 @@ struct Queued {
     item: MediaItem,
     info: ItemInfo,
     output: Option<Target>,
+    planning_error: Option<Error>,
     position: usize,
     total: usize,
 }
@@ -958,6 +974,10 @@ printf '%s\n' "$path"
         let out = dir.join("out");
         std::fs::create_dir_all(&out).unwrap();
         let names = ["a_200", "b_10", "c_10", "d_10"];
+        // b and d were transcribed by an earlier run.
+        for done in ["b_10", "d_10"] {
+            std::fs::write(out.join(format!("{done}.txt")), "earlier run").unwrap();
+        }
         let inputs: Vec<Input> = names
             .into_iter()
             .map(|name| {
@@ -966,10 +986,6 @@ printf '%s\n' "$path"
                 Input::Path(path)
             })
             .collect();
-        // b and d were transcribed by an earlier run.
-        for done in ["b_10", "d_10"] {
-            std::fs::write(out.join(format!("{done}.txt")), "earlier run").unwrap();
-        }
         let transcriber = std::sync::Arc::new(Draining::default());
         let tafrigh = Tafrigh::builder(transcriber.clone())
             .output(OutputWriter::new(&out).formats([

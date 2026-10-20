@@ -52,7 +52,11 @@ For example, `tafrigh lectures/ -r -o out` writes `lectures/course/01.mp3` as `o
 
 Downloads go to `--download-dir` when given, otherwise to `-o` or the current directory. Side-by-side URL transcripts follow the actual downloaded file's directory and basename, including custom yt-dlp output templates. In tree and flat modes, URL transcripts use the video ID.
 
-Names gain `-2`, `-3`, and so on only when their destination files collide, ignoring case. Files in different destination folders keep their names. The same placement applies to word-level and uncompacted outputs. `--skip-existing` skips an item only when every requested output exists; keep the same inputs and order when resuming, since numeric suffixes are assigned in discovery order. One `sample.csv` is written for the run, in `-o` or in the current directory for side-by-side mode.
+Names gain `-2`, `-3`, and so on when their destination files collide, ignoring case. Inputs are resolved before transcription so mirrored directories take precedence over conflicting transcript names. Files in different destination folders keep their names. The same placement applies to word-level and uncompacted outputs. An unusable item destination is reported as a failure while the remaining items continue.
+
+`--skip-existing` skips an item only when every requested output file exists, including word-level and uncompacted variants. If any requested file is missing, the item is transcribed again and its requested outputs are rewritten. Without `--skip-existing`, existing files at the selected destinations are overwritten. Skipping checks filenames only; it does not verify the source or contents. When resuming, keep the same inputs, order, and output settings. Changes to which colliding inputs are discovered or downloaded can change their numeric suffixes between runs.
+
+One sample CSV is written for the run, in `-o` or in the current directory for side-by-side mode. It uses `sample.csv`, or `sample-2.csv`, `sample-3.csv`, and so on when the path is needed by a transcript or directory.
 
 To retain the flat layout from version 0.0.1, pass `--output-mode flat -o DIR` (use `-o .` for the current directory). Run `tafrigh --help` for every option.
 

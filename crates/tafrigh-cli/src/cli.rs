@@ -95,11 +95,11 @@ pub struct Output {
     #[arg(long)]
     pub keep_uncompacted: bool,
 
-    /// Skip items whose transcripts already exist.
+    /// Skip items when every requested output file already exists.
     #[arg(long)]
     pub skip_existing: bool,
 
-    /// Write sample.csv with this many random segments (-o, or the current directory in side-by-side mode).
+    /// Write a sample CSV with this many random segments; suffix its name on collisions.
     #[arg(long, value_name = "N", default_value_t = 0)]
     pub sample: usize,
 }
