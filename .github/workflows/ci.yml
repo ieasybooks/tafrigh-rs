@@ -25,4 +25,3 @@ jobs:
       # The end-to-end tests decode audio with ffmpeg.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: cargo test --workspace --locked
-      - run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'

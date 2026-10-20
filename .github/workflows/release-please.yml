@@ -42,19 +42,18 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.branch }}
           fetch-depth: 0
-      - name: Complete the release PR
+      - name: Update the workspace lockfile
         if: steps.pr.outputs.branch != ''
         env:
           RELEASE_BRANCH: ${{ steps.pr.outputs.branch }}
         run: |
           rustup toolchain install
           cargo update --workspace
-          python3 .github/scripts/prepare_release.py
-          if ! git diff --quiet -- Cargo.lock CHANGELOG.md; then
+          if ! git diff --quiet -- Cargo.lock; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add Cargo.lock CHANGELOG.md
-            git commit -m 'chore: prepare release artifacts'
+            git add Cargo.lock
+            git commit -m 'chore: update workspace lockfile'
             git push origin "HEAD:$RELEASE_BRANCH"
           fi
       # Releases created with GITHUB_TOKEN do not trigger release-event workflows.

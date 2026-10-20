@@ -124,7 +124,6 @@ The Rust version is pinned in `rust-toolchain.toml`; rustup (or `mise install`) 
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
-python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 ```
 
 The Silero test fixtures are committed. To regenerate them, see `crates/tafrigh/tests/fixtures/generate.py`.
