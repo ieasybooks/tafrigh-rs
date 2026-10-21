@@ -236,31 +236,35 @@ impl Transcriber for ChunkedTranscriber {
                 Some((request, result)) = inflight.next(), if !inflight.is_empty() => {
                     let request: Request = request;
                     let meta = ChunkMeta::of(&request.chunk);
-                    let resent = request.speech.is_none();
+                    let resent = matches!(request.kind, RequestKind::Resend);
                     match result {
                         Ok(recognition) => {
-                            let (recognized, timed) = meta.into_segments(recognition);
+                            let recognized = meta.recognized(recognition);
                             if resent {
                                 tracing::debug!(
                                     "chunk #{} resend {:.2}s–{:.2}s: {} segment(s)",
-                                    meta.index, meta.start, meta.end, recognized.len()
+                                    meta.index, meta.start, meta.end, recognized.segments.len()
                                 );
                             } else {
                                 progress.report(TranscribeEvent::ChunkRecognized {
                                     index: meta.index,
                                     start: meta.start,
                                     end: meta.end,
-                                    empty: recognized.is_empty(),
+                                    empty: recognized.segments.is_empty(),
                                 });
                                 if let Some(min_gap) = resend_gap
-                                    && timed
+                                    && recognized.timed
                                 {
-                                    for again in self.resends(&request, &recognized, min_gap) {
+                                    for again in
+                                        self.resends(&request, &recognized.segments, min_gap)
+                                    {
                                         inflight.push(recognize(self.recognizer.clone(), again));
                                     }
                                 }
                             }
-                            segments.extend(recognized.into_iter().map(|s| (meta.index, s)));
+                            segments.extend(
+                                recognized.segments.into_iter().map(|s| (meta.index, s)),
+                            );
                         }
                         Err(source) => {
                             if let Err(err) = self.failed(meta, resent, source, media, progress) {
@@ -314,9 +318,16 @@ struct Request {
     first_sample: usize,
     /// Padding samples before the audio in `chunk.samples`.
     lead: usize,
-    /// Detected speech in the chunk, in source samples; `None` for a resend, which is not
-    /// checked again.
-    speech: Option<Vec<SpeechSpan>>,
+    kind: RequestKind,
+}
+
+/// Why a request is sent.
+enum RequestKind {
+    /// A chunk cut from detected speech. `speech` holds its speech spans, in source samples,
+    /// for finding what the recognizer skipped.
+    Chunk { speech: Vec<SpeechSpan> },
+    /// A stretch of a chunk sent again because the recognizer skipped it. Not checked again.
+    Resend,
 }
 
 async fn recognize(
@@ -335,7 +346,7 @@ impl Request {
     /// stretch would be the whole chunk (nothing was recognized), resending it unchanged would
     /// give the same answer, so its speech spans go out one by one instead.
     fn missed_speech(&self, segments: &[Segment], min_gap: usize) -> Vec<SpeechSpan> {
-        let Some(speech) = &self.speech else {
+        let RequestKind::Chunk { speech } = &self.kind else {
             return Vec::new();
         };
         let mut words: Vec<(usize, usize)> = segments
@@ -420,7 +431,7 @@ impl Request {
             },
             first_sample: self.first_sample + from,
             lead,
-            speech: None,
+            kind: RequestKind::Resend,
         }
     }
 }
@@ -485,9 +496,8 @@ impl ChunkMeta {
     }
 
     /// One segment per utterance, bounded by its words, when every utterance has word
-    /// timings; otherwise a single segment spanning the chunk. The flag tells which: `true`
-    /// when the words show what was recognized where (also when nothing was).
-    fn into_segments(self, recognition: Recognition) -> (Vec<Segment>, bool) {
+    /// timings; otherwise a single segment spanning the chunk.
+    fn recognized(self, recognition: Recognition) -> Recognized {
         let utterances: Vec<(String, Vec<Word>)> = recognition
             .utterances
             .into_iter()
@@ -497,7 +507,10 @@ impl ChunkMeta {
             })
             .collect();
         if utterances.is_empty() {
-            return (Vec::new(), true);
+            return Recognized {
+                segments: Vec::new(),
+                timed: true,
+            };
         }
         if utterances.iter().all(|(_, words)| !words.is_empty()) {
             let segments = utterances
@@ -513,7 +526,10 @@ impl ChunkMeta {
                     }
                 })
                 .collect();
-            return (segments, true);
+            return Recognized {
+                segments,
+                timed: true,
+            };
         }
         let mut text = String::new();
         let mut words = Vec::new();
@@ -530,8 +546,20 @@ impl ChunkMeta {
             text,
             words,
         };
-        (vec![segment], false)
+        Recognized {
+            segments: vec![segment],
+            timed: false,
+        }
     }
+}
+
+/// The segments recognized in a chunk.
+#[derive(Debug, PartialEq)]
+struct Recognized {
+    segments: Vec<Segment>,
+    /// Whether word timings show what was recognized where, so skipped speech can be found.
+    /// Also true when nothing was recognized.
+    timed: bool,
 }
 
 enum Produced {
@@ -694,7 +722,7 @@ impl Chunker {
             },
             first_sample: span.start,
             lead,
-            speech: Some(speech),
+            kind: RequestKind::Chunk { speech },
         }
     }
 }
@@ -776,7 +804,7 @@ mod tests {
                 },
             ],
         };
-        let (segments, _) = META.into_segments(recognition);
+        let segments = META.recognized(recognition).segments;
         assert_eq!(segments.len(), 2);
         assert_eq!((segments[0].start, segments[0].end), (10.5, 11.6));
         assert_eq!(segments[0].text, "first part");
@@ -797,12 +825,18 @@ mod tests {
                 },
             ],
         };
-        let (segments, _) = META.into_segments(recognition);
+        let segments = META.recognized(recognition).segments;
         assert_eq!(segments.len(), 1);
         assert_eq!((segments[0].start, segments[0].end), (10.0, 20.0));
         assert_eq!(segments[0].text, "timed untimed");
         assert_eq!(segments[0].words.len(), 1);
-        assert_eq!(META.into_segments(Recognition::text("  ")), (vec![], true));
+        assert_eq!(
+            META.recognized(Recognition::text("  ")),
+            Recognized {
+                segments: vec![],
+                timed: true
+            }
+        );
     }
 
     #[test]
@@ -832,15 +866,18 @@ mod tests {
 
     #[test]
     fn utterances_with_only_invalid_words_use_chunk_fallback() {
-        let segments = META.into_segments(Recognition {
+        let recognized = META.recognized(Recognition {
             utterances: vec![Utterance {
                 text: "invalid timings".into(),
                 words: vec![word(f64::NAN, 1.0, "invalid")],
             }],
         });
         assert_eq!(
-            segments,
-            (vec![Segment::new(10.0, 20.0, "invalid timings")], false)
+            recognized,
+            Recognized {
+                segments: vec![Segment::new(10.0, 20.0, "invalid timings")],
+                timed: false
+            }
         );
     }
 
@@ -862,12 +899,12 @@ mod tests {
             },
             first_sample: first,
             lead,
-            speech: Some(
-                speech
+            kind: RequestKind::Chunk {
+                speech: speech
                     .iter()
                     .map(|&(start, end)| SpeechSpan { start, end })
                     .collect(),
-            ),
+            },
         }
     }
 
@@ -934,7 +971,7 @@ mod tests {
         // The audio is the original chunk's 1s–3s.
         assert_eq!(resend.chunk.samples[S / 2], (S + 1) as i16);
         assert_eq!(resend.chunk.samples[S / 2 + 2 * S - 1], (3 * S) as i16);
-        assert!(resend.speech.is_none());
+        assert!(matches!(resend.kind, RequestKind::Resend));
         // Regions reaching past the chunk are clamped to it.
         let clamped = chunk.resend(span(53 * S, 60 * S), None);
         assert_eq!(clamped.chunk.samples.len(), S);

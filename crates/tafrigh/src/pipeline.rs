@@ -312,9 +312,7 @@ impl Tafrigh {
                     finished.insert(order, done);
                     while let Some(done) = finished.remove(&reported) {
                         reported += 1;
-                        let status =
-                            self.finish_item(&done.queued, done.outcome, events, &mut samples)?;
-                        report.items.push(ItemReport { item: done.queued.info, status });
+                        report.items.push(self.finish_item(done, events, &mut samples)?);
                     }
                 }
                 () = async {
@@ -377,9 +375,7 @@ impl Tafrigh {
                 } else {
                     layout.directory(&item, index)
                 };
-                let directory = directory
-                    .map(|dir| layout.require_directory(&dir))
-                    .transpose();
+                let directory = directory.map(|dir| layout.require_directory(&dir));
                 resolved.push((item, directory, position + 1, total));
             }
         }
@@ -391,17 +387,17 @@ impl Tafrigh {
                     id: unique_name(&item.id, |id| used_ids.insert(Arc::from(id))).into(),
                     title: item.title.clone(),
                 };
-                let planned =
-                    directory.and_then(|dir| dir.map(|dir| layout.plan(&item, &dir)).transpose());
-                let (output, planning_error) = match planned {
-                    Ok(output) => (output, None),
-                    Err(err) => (None, Some(err)),
+                let destination = match directory {
+                    None => Destination::AfterDownload,
+                    Some(Ok(dir)) => layout
+                        .plan(&item, &dir)
+                        .map_or_else(Destination::Unusable, Destination::Planned),
+                    Some(Err(err)) => Destination::Unusable(err),
                 };
                 Queued {
                     item,
                     info,
-                    output,
-                    planning_error,
+                    destination,
                     position,
                     total,
                 }
@@ -417,7 +413,7 @@ impl Tafrigh {
     /// (or does nothing when its outputs exist). Also starts downloading the item after it.
     fn start_item<'a>(
         &'a self,
-        mut next: Queued,
+        next: Queued,
         queue: &Queue,
         events: &'a dyn Progress<Event>,
         prefetched: &mut Option<(Arc<str>, PrefetchedDownload)>,
@@ -427,7 +423,7 @@ impl Tafrigh {
             position: next.position,
             total: next.total,
         });
-        let mut download = prefetched.take().and_then(|(id, download)| {
+        let download = prefetched.take().and_then(|(id, download)| {
             // A prefetch for any other item is dropped, which cancels it.
             (id == next.info.id).then_some(download)
         });
@@ -436,83 +432,101 @@ impl Tafrigh {
                 .prefetch_download(following)
                 .map(|download| (following.info.id.clone(), download));
         }
-        if let Some(error) = next.planning_error.take() {
-            return Started {
-                done: Box::pin(std::future::ready(Done {
-                    queued: next,
-                    outcome: Outcome::Failed(error),
-                })),
-                sent: None,
-            };
-        }
-        if self.skip_existing && next.output.as_ref().is_some_and(Target::exists) {
-            return Started {
-                done: Box::pin(std::future::ready(Done {
-                    queued: next,
-                    outcome: Outcome::Skipped,
-                })),
-                sent: None,
-            };
-        }
-        let sent = Arc::new(Notify::new());
-        let signal = sent.clone();
-        let layout = queue.layout.clone();
-        let done = Box::pin(async move {
-            let prepared = self
-                .prepare_target(&mut next, &layout, events, &mut download)
-                .await;
-            let outcome = match prepared {
-                Err(err) => Outcome::Failed(err),
-                Ok(())
-                    if self.skip_existing && next.output.as_ref().is_some_and(Target::exists) =>
-                {
-                    Outcome::Skipped
-                }
-                Ok(()) => match self
-                    .transcribe_item(&next.item, &next.info, events, download, &signal)
-                    .await
-                {
-                    Ok((path, segments)) => Outcome::Transcribed { path, segments },
-                    Err(err) => Outcome::Failed(err),
-                },
-            };
-            // Also when it failed before sending everything: the next item may start.
-            signal.notify_one();
-            Done {
-                queued: next,
-                outcome,
+        let Queued {
+            item,
+            info,
+            destination,
+            ..
+        } = next;
+        // Items that cannot start finish at once, without taking a transcription slot.
+        let outcome = match destination {
+            Destination::Unusable(error) => Outcome::Failed(error),
+            Destination::Planned(target) if self.skip_existing && target.exists() => {
+                Outcome::Skipped
             }
-        });
-        Started {
-            done,
-            sent: Some(sent),
-        }
+            destination => {
+                let sent = Arc::new(Notify::new());
+                let signal = sent.clone();
+                let layout = queue.layout.clone();
+                let done = Box::pin(async move {
+                    let link = item.link.clone();
+                    let outcome = self
+                        .work(item, &info, destination, &layout, events, download, &signal)
+                        .await
+                        .unwrap_or_else(Outcome::Failed);
+                    // Also when it failed before sending everything: the next item may start.
+                    signal.notify_one();
+                    Done {
+                        info,
+                        link,
+                        outcome,
+                    }
+                });
+                return Started {
+                    done,
+                    sent: Some(sent),
+                };
+            }
+        };
+        Started::finished(Done {
+            info,
+            link: item.link,
+            outcome,
+        })
     }
 
-    /// Side-by-side URLs follow yt-dlp's actual path, including custom output templates.
-    /// Plan before transcription, so subsequent items claim their names in input order.
-    async fn prepare_target(
+    /// Downloads and transcribes an item that has started.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the item's own state plus the run's shared handles"
+    )]
+    async fn work(
         &self,
-        next: &mut Queued,
+        mut item: MediaItem,
+        info: &ItemInfo,
+        destination: Destination,
         layout: &Mutex<Layout>,
         events: &dyn Progress<Event>,
-        download: &mut Option<PrefetchedDownload>,
-    ) -> Result<()> {
-        if next.output.is_none() {
-            let path = self
-                .media_path(&next.item, &next.info, events, download.take())
-                .await?;
-            next.output = Some(layout.lock().unwrap().downloaded(&path)?);
-            next.item.media = Media::File(path);
-        }
-        Ok(())
+        mut download: Option<PrefetchedDownload>,
+        sent: &Notify,
+    ) -> Result<Outcome> {
+        let target = match destination {
+            Destination::Planned(target) => target,
+            // Side-by-side URLs follow yt-dlp's actual path, including custom output
+            // templates. Plan before transcription, so later items claim their names in
+            // input order.
+            Destination::AfterDownload => {
+                let path = self
+                    .media_path(&item, info, events, download.take())
+                    .await?;
+                let target = layout.lock().unwrap().downloaded(&path)?;
+                item.media = Media::File(path);
+                if self.skip_existing && target.exists() {
+                    return Ok(Outcome::Skipped);
+                }
+                target
+            }
+            Destination::Unusable(err) => return Err(err),
+        };
+        let (media, segments) = self
+            .transcribe_item(&item, info, events, download, sent)
+            .await?;
+        Ok(Outcome::Transcribed(Transcript {
+            target,
+            media,
+            segments,
+        }))
     }
 
     fn prefetch_download(&self, next: &Queued) -> Option<PrefetchedDownload> {
-        if matches!(self.backend, Backend::Captions(_))
-            || next.planning_error.is_some()
+        let needed = match &next.destination {
+            Destination::Planned(target) => !(self.skip_existing && target.exists()),
+            Destination::AfterDownload => true,
+            Destination::Unusable(_) => false,
+        };
+        if !needed
+            || matches!(self.backend, Backend::Captions(_))
             || !matches!(next.item.media, Media::Remote { .. })
-            || (self.skip_existing && next.output.as_ref().is_some_and(Target::exists))
         {
             return None;
         }
@@ -578,75 +592,85 @@ impl Tafrigh {
     /// whole run are returned.
     fn finish_item(
         &self,
-        next: &Queued,
-        outcome: Outcome,
+        done: Done,
         events: &dyn Progress<Event>,
         samples: &mut SampleReservoir,
-    ) -> Result<ItemStatus> {
-        let info = next.info.clone();
+    ) -> Result<ItemReport> {
+        let Done {
+            info,
+            link,
+            outcome,
+        } = done;
         let written = match outcome {
             Outcome::Skipped => {
                 events.report(Event::ItemSkipped {
                     item: info.clone(),
                     reason: "outputs exist".into(),
                 });
-                return Ok(ItemStatus::Skipped);
+                return Ok(ItemReport {
+                    item: info,
+                    status: ItemStatus::Skipped,
+                });
             }
-            Outcome::Transcribed { path, segments } => self
-                .write_item(next, path.as_deref(), &segments, samples)
-                .map(|outputs| (segments.len(), outputs)),
+            Outcome::Transcribed(transcript) => {
+                let segments = transcript.segments.len();
+                self.write_item(&info, link.as_deref(), transcript, samples)
+                    .map(|outputs| (segments, outputs))
+            }
             Outcome::Failed(err) => Err(err),
         };
-        match written {
+        let status = match written {
             Ok((segments, outputs)) => {
                 events.report(Event::ItemFinished {
                     item: info.clone(),
                     segments,
                     outputs: outputs.clone(),
                 });
-                Ok(ItemStatus::Transcribed { segments, outputs })
+                ItemStatus::Transcribed { segments, outputs }
             }
-            Err(err @ Error::ToolUnavailable { .. }) => Err(err),
+            Err(err @ Error::ToolUnavailable { .. }) => return Err(err),
             Err(err) => {
                 let error = ErrorChain(&err).to_string();
                 events.report(Event::ItemFailed {
                     item: info.clone(),
                     error: error.clone(),
                 });
-                Ok(ItemStatus::Failed(error))
+                ItemStatus::Failed(error)
             }
-        }
+        };
+        Ok(ItemReport { item: info, status })
     }
 
     /// Writes an item's transcripts and adds its segments to the sample; returns the files.
     fn write_item(
         &self,
-        next: &Queued,
-        path: Option<&std::path::Path>,
-        segments: &[Segment],
+        info: &ItemInfo,
+        link: Option<&str>,
+        transcript: Transcript,
         samples: &mut SampleReservoir,
     ) -> Result<Vec<PathBuf>> {
-        let output = next
-            .output
-            .as_ref()
-            .expect("destination planned before transcription");
-        if output.writer.needs_words()
+        let Transcript {
+            target,
+            media,
+            segments,
+        } = transcript;
+        if target.writer.needs_words()
             && !segments.is_empty()
             && segments.iter().all(|s| s.words.is_empty())
         {
             tracing::warn!(
                 "{}: the recognizer returned no word timings; word-level files will be empty",
-                next.info.id
+                info.id
             );
         }
-        let written = output.write(segments)?;
+        let written = target.write(&segments)?;
         if self.sample > 0 {
             for segment in written.segments {
                 samples.push(SampleRow {
                     segment,
-                    item: next.info.id.to_string(),
-                    link: next.item.link.clone(),
-                    file: path.map(std::path::Path::to_owned),
+                    item: info.id.to_string(),
+                    link: link.map(str::to_owned),
+                    file: media.clone(),
                 });
             }
         }
@@ -667,10 +691,19 @@ struct Queue {
 struct Queued {
     item: MediaItem,
     info: ItemInfo,
-    output: Option<Target>,
-    planning_error: Option<Error>,
+    destination: Destination,
     position: usize,
     total: usize,
+}
+
+/// Where an item's transcripts go.
+enum Destination {
+    /// Chosen while planning the run.
+    Planned(Target),
+    /// Beside the downloaded file of a side-by-side URL; chosen once it is downloaded.
+    AfterDownload,
+    /// Could not be chosen; the item fails without being transcribed.
+    Unusable(Error),
 }
 
 /// An item's work, and for one that transcribes, the signal that it has sent all its audio.
@@ -679,19 +712,36 @@ struct Started<'a> {
     sent: Option<Arc<Notify>>,
 }
 
+impl Started<'_> {
+    /// Work that is already over and takes no transcription slot.
+    fn finished(done: Done) -> Self {
+        Self {
+            done: Box::pin(std::future::ready(done)),
+            sent: None,
+        }
+    }
+}
+
 /// An item whose work is over, waiting for its turn to be written and reported.
 struct Done {
-    queued: Queued,
+    info: ItemInfo,
+    /// Link to the original, for the sample.
+    link: Option<String>,
     outcome: Outcome,
 }
 
 enum Outcome {
     Skipped,
-    Transcribed {
-        path: Option<PathBuf>,
-        segments: Vec<Segment>,
-    },
+    Transcribed(Transcript),
     Failed(Error),
+}
+
+/// What an item produced, and where it goes.
+struct Transcript {
+    target: Target,
+    /// The media file transcribed; `None` for captions.
+    media: Option<PathBuf>,
+    segments: Vec<Segment>,
 }
 
 #[cfg(test)]
