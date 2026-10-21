@@ -20,22 +20,49 @@ env:
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.target }}${{ matrix.variant }}
     runs-on: ${{ matrix.os }}
+    # The CUDA builds take the longest; fail instead of running into GitHub's 6-hour limit.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         include:
           # Ubuntu 22.04 keeps the glibc requirement low (2.35), so the binaries run on older
-          # distributions too.
+          # distributions too. On Linux, ggml would otherwise tune Cohere's CPU code to the
+          # build machine, so `cmake-args` pins a CPU floor that users' machines also meet, and
+          # it keeps transcribe.cpp from linking the runner's system BLAS, which users may lack.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
+            features: cohere
+            cmake-args: -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON
+          # CUDA builds link the CUDA runtime and cuBLAS of their major version; users install
+          # them with the NVIDIA driver. ggml's default GPU list (up to 10 architectures) takes
+          # hours on these runners, so build transcribe.cpp's release list: Turing, Ampere, Ada
+          # and Hopper, with PTX for newer GPUs, plus native Blackwell.
+          - target: x86_64-unknown-linux-gnu
+            variant: -cuda12
+            os: ubuntu-22.04
+            features: cuda
+            cuda: '12.9'
+            cmake-args: -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DCMAKE_CUDA_ARCHITECTURES=75;80;86;89;90;120a-real
+          - target: x86_64-unknown-linux-gnu
+            variant: -cuda13
+            os: ubuntu-22.04
+            features: cuda
+            cuda: '13.4'
+            cmake-args: -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DCMAKE_CUDA_ARCHITECTURES=75;80;86;89;90;120a-real
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04-arm
+            features: cohere
+            cmake-args: -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16
+          # transcribe.cpp already pins a portable CPU floor on macOS and embeds Metal.
           - target: aarch64-apple-darwin
             os: macos-latest
+            features: cohere
           - target: x86_64-apple-darwin
             os: macos-latest
+            features: cohere
     steps:
       - uses: actions/checkout@v7
       # Installs the toolchain pinned in rust-toolchain.toml, then the target to build for.
@@ -51,25 +78,42 @@ jobs:
             echo "::error::Publishing requires the tag v$version"
             exit 1
           fi
+      - name: Install CUDA ${{ matrix.cuda }}
+        if: matrix.cuda
+        env:
+          CUDA: ${{ matrix.cuda }}
+        run: |
+          # Only the compiler and the libraries ggml links, from NVIDIA's apt repository.
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update -q
+          version=$(echo "$CUDA" | tr . -)
+          sudo apt-get install -y -q --no-install-recommends \
+            "cuda-nvcc-$version" "cuda-cudart-dev-$version" "libcublas-dev-$version"
+          echo "/usr/local/cuda-$CUDA/bin" >> "$GITHUB_PATH"
+          echo "CUDA_PATH=/usr/local/cuda-$CUDA" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
-      - run: cargo build --release --locked --package tafrigh-cli --target ${{ matrix.target }}
+          key: ${{ matrix.target }}${{ matrix.variant }}
+      - run: cargo build --release --locked --package tafrigh-cli --features ${{ matrix.features }} --target ${{ matrix.target }}
+        env:
+          TRANSCRIBE_CMAKE_ARGS: ${{ matrix.cmake-args }}
       - name: Package
         shell: bash
         env:
           VERSION: ${{ (github.event_name == 'release' || inputs.publish) && github.ref_name || 'dev' }}
           TARGET: ${{ matrix.target }}
+          VARIANT: ${{ matrix.variant }}
         run: |
-          name="tafrigh-$VERSION-$TARGET"
+          name="tafrigh-$VERSION-$TARGET$VARIANT"
           mkdir -p "$name/docs"
-          cp "target/$TARGET/release/tafrigh" README.md LICENSE "$name/"
+          cp "target/$TARGET/release/tafrigh" README.md LICENSE crates/tafrigh-cohere/THIRD-PARTY-LICENSES.md "$name/"
           cp docs/cli.md docs/tafrigh.1 "$name/docs/"
           tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.target }}
+          name: ${{ matrix.target }}${{ matrix.variant }}
           path: tafrigh-*.tar.gz*
           if-no-files-found: error
 

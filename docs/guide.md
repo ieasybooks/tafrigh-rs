@@ -63,12 +63,14 @@ Models are kept in `tafrigh/models` in the user cache folder: `$XDG_CACHE_HOME` 
 | Build | GPU |
 |---|---|
 | macOS arm64 archive | Metal |
-| Linux x86_64 `-cuda12` archive | NVIDIA, with the NVIDIA driver and the CUDA 12 runtime and cuBLAS (`libcudart.so.12`, `libcublas.so.12`, `libcublasLt.so.12`) |
+| Linux x86_64 `-cuda12` archive | NVIDIA Turing (GTX 16 and RTX 20 series) or newer, with the NVIDIA driver and the CUDA 12 runtime and cuBLAS (`libcudart.so.12`, `libcublas.so.12`, `libcublasLt.so.12`) |
 | Linux x86_64 `-cuda13` archive | NVIDIA Turing (GTX 16 and RTX 20 series) or newer, with driver 580 or newer and the CUDA 13 runtime and cuBLAS |
 | Other archives | none; Cohere runs on the CPU |
 | `cargo install tafrigh-cli --features cuda` | NVIDIA, built against your CUDA toolkit |
 
-The CUDA archives don't include NVIDIA's libraries. Without them, tafrigh doesn't start and reports `error while loading shared libraries: libcublas.so.12` (or `.13`). Newer drivers run both archives, but the CUDA runtime must match the archive's major version.
+On the CPU, the Linux release archives need AVX2 (Intel since 2013, AMD Zen) on x86_64, or ARMv8.2 with dot-product instructions (such as AWS Graviton2 or Raspberry Pi 5) on arm64. Build from source with Cargo for older CPUs.
+
+Both CUDA archives include native code for Turing, Ampere, Ada, Hopper and Blackwell GPUs; newer GPUs compile it on first use. For older GPUs, build from source with `--features cuda`. The CUDA archives don't include NVIDIA's libraries. Without them, tafrigh doesn't start and reports `error while loading shared libraries: libcublas.so.12` (or `.13`). Newer drivers run both archives, but the CUDA runtime must match the archive's major version.
 
 ### Chunks and limits
 
