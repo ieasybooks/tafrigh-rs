@@ -1,13 +1,12 @@
 //! Running a transcriber over user inputs and writing transcripts.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
-use futures::stream::FuturesUnordered;
-use tokio::sync::Notify;
+use futures::stream::FuturesOrdered;
+use tokio::sync::{Notify, Semaphore};
 
 use crate::error::task_result;
 use crate::event::{Event, ItemInfo, Progress, TranscribeEvent};
@@ -275,62 +274,34 @@ impl Tafrigh {
     ) -> Result<RunReport> {
         let mut report = RunReport::default();
         let inputs: Vec<_> = inputs.into_iter().collect();
-        let mut queue = self.prepare_queue(&inputs, events, &mut report).await?;
+        let (queue, layout) = self.prepare_queue(&inputs, events, &mut report).await?;
+        let run = RunState {
+            layout: Mutex::new(layout),
+            slots: Semaphore::new(MAX_TRANSCRIBING),
+            events,
+        };
+        let turns: Vec<Turn> = std::iter::repeat_with(Turn::default)
+            .take(queue.len())
+            .collect();
+        // Every item waits for its own turn; results come back in input order.
+        let mut items: FuturesOrdered<_> = queue
+            .into_iter()
+            .enumerate()
+            .map(|(index, queued)| {
+                let previous = index.checked_sub(1).map(|previous| &turns[previous]);
+                self.process(queued, previous, &turns[index], &run)
+            })
+            .collect();
         let mut samples = SampleReservoir::new(self.sample);
-
-        let mut running = FuturesUnordered::new();
-        // Items finished out of order wait here until those before them are reported.
-        let mut finished = BTreeMap::new();
-        let (mut started, mut reported) = (0, 0);
-        // Items transcribing; the newest one's signal fires once it has sent all its audio.
-        let mut transcribing = 0;
-        let mut newest: Option<Arc<Notify>> = None;
-        let mut prefetched = None;
-        let mut exhausted = false;
-        loop {
-            if !exhausted && newest.is_none() && transcribing < MAX_TRANSCRIBING {
-                match queue.items.pop_front() {
-                    Some(next) => {
-                        let work = self.start_item(next, &queue, events, &mut prefetched);
-                        let active = work.sent.is_some();
-                        if let Some(sent) = work.sent {
-                            transcribing += 1;
-                            newest = Some(sent);
-                        }
-                        let (order, done) = (started, work.done);
-                        running.push(async move { (order, active, done.await) });
-                        started += 1;
-                        continue;
-                    }
-                    None => exhausted = true,
-                }
-            }
-            let signal = newest.clone();
-            tokio::select! {
-                Some((order, active, done)) = running.next() => {
-                    let done: Done = done;
-                    if active {
-                        transcribing -= 1;
-                    }
-                    finished.insert(order, done);
-                    while let Some(done) = finished.remove(&reported) {
-                        reported += 1;
-                        report.items.push(self.finish_item(done, events, &mut samples)?);
-                    }
-                }
-                () = async {
-                    match signal {
-                        Some(sent) => sent.notified().await,
-                        None => std::future::pending().await,
-                    }
-                }, if newest.is_some() => newest = None,
-                else => break,
-            }
+        while let Some(done) = items.next().await {
+            report
+                .items
+                .push(self.finish_item(done, events, &mut samples)?);
         }
 
         if self.sample > 0 {
             write_sample(
-                &queue.layout.lock().unwrap().sample_path()?,
+                &run.layout.lock().unwrap().sample_path()?,
                 samples.rows(),
                 self.sample,
             )?;
@@ -344,7 +315,7 @@ impl Tafrigh {
         inputs: &[Input],
         events: &dyn Progress<Event>,
         report: &mut RunReport,
-    ) -> Result<Queue> {
+    ) -> Result<(Vec<Queued>, Layout)> {
         let mut layout = Layout::new(self.output_mode.clone(), self.output.clone(), inputs);
         let mut resolved = Vec::new();
         for (index, input) in inputs.iter().enumerate() {
@@ -408,92 +379,70 @@ impl Tafrigh {
                 }
             })
             .collect();
-        Ok(Queue {
-            items,
-            layout: Arc::new(Mutex::new(layout)),
-        })
+        Ok((items, layout))
     }
 
-    /// Reports `next` as started and returns its work, which downloads and transcribes it
-    /// (or does nothing when its outputs exist). Also starts downloading the item after it.
-    fn start_item<'a>(
-        &'a self,
-        next: Queued,
-        queue: &Queue,
-        events: &'a dyn Progress<Event>,
-        prefetched: &mut Option<(Arc<str>, PrefetchedDownload)>,
-    ) -> Started<'a> {
-        events.report(Event::ItemStarted {
-            item: next.info.clone(),
-            position: next.position,
-            total: next.total,
-        });
-        let download = prefetched.take().and_then(|(id, download)| {
-            // A prefetch for any other item is dropped, which cancels it.
-            (id == next.info.id).then_some(download)
-        });
-        if let Some(following) = queue.items.front() {
-            *prefetched = self
-                .prefetch_download(following)
-                .map(|download| (following.info.id.clone(), download));
-        }
+    /// Works through one item. It may download once the previous item has started, and start
+    /// once that item has sent all its audio and a slot is free.
+    async fn process(
+        &self,
+        queued: Queued,
+        previous: Option<&Turn>,
+        turn: &Turn,
+        run: &RunState<'_>,
+    ) -> Done {
         let Queued {
             item,
             info,
             destination,
-            ..
-        } = next;
-        // Items that cannot start finish at once, without taking a transcription slot.
+            position,
+            total,
+        } = queued;
+        if let Some(previous) = previous {
+            previous.started.wait().await;
+        }
+        let download = self.prefetch(&item, &destination);
+        if let Some(previous) = previous {
+            previous.sent.wait().await;
+        }
+        let slot = run.slots.acquire().await.expect("slots are never closed");
+        run.events.report(Event::ItemStarted {
+            item: info.clone(),
+            position,
+            total,
+        });
+        turn.started.fire();
+
+        let link = item.link.clone();
         let outcome = match destination {
             Destination::Unusable(error) => Outcome::Failed(error),
             Destination::Planned(target) if self.skip_existing && target.exists(&self.output) => {
                 Outcome::Skipped
             }
-            destination => {
-                let sent = Arc::new(Notify::new());
-                let signal = sent.clone();
-                let layout = queue.layout.clone();
-                let done = Box::pin(async move {
-                    let link = item.link.clone();
-                    let outcome = self
-                        .work(item, &info, destination, &layout, events, download, &signal)
-                        .await
-                        .unwrap_or_else(Outcome::Failed);
-                    // Also when it failed before sending everything: the next item may start.
-                    signal.notify_one();
-                    Done {
-                        info,
-                        link,
-                        outcome,
-                    }
-                });
-                return Started {
-                    done,
-                    sent: Some(sent),
-                };
-            }
+            destination => self
+                .work(item, &info, destination, download, &turn.sent, run)
+                .await
+                .unwrap_or_else(Outcome::Failed),
         };
-        Started::finished(Done {
+        // Also when it failed before sending everything, or did not transcribe at all.
+        turn.sent.fire();
+        drop(slot);
+        Done {
             info,
-            link: item.link,
+            link,
             outcome,
-        })
+        }
     }
 
     /// Downloads and transcribes an item that has started.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the item's own state plus the run's shared handles"
-    )]
     async fn work(
         &self,
         mut item: MediaItem,
         info: &ItemInfo,
         destination: Destination,
-        layout: &Mutex<Layout>,
-        events: &dyn Progress<Event>,
         mut download: Option<PrefetchedDownload>,
-        sent: &Notify,
+        sent: &Signal,
+        run: &RunState<'_>,
     ) -> Result<Outcome> {
         let target = match destination {
             Destination::Planned(target) => target,
@@ -502,9 +451,9 @@ impl Tafrigh {
             // input order.
             Destination::AfterDownload => {
                 let path = self
-                    .media_path(&item, info, events, download.take())
+                    .media_path(&item, info, run.events, download.take())
                     .await?;
-                let target = layout.lock().unwrap().downloaded(&path)?;
+                let target = run.layout.lock().unwrap().downloaded(&path)?;
                 item.media = Media::File(path);
                 if self.skip_existing && target.exists(&self.output) {
                     return Ok(Outcome::Skipped);
@@ -514,7 +463,7 @@ impl Tafrigh {
             Destination::Unusable(err) => return Err(err),
         };
         let (media, segments) = self
-            .transcribe_item(&item, info, events, download, sent)
+            .transcribe_item(&item, info, run.events, download, sent)
             .await?;
         Ok(Outcome::Transcribed(Transcript {
             target,
@@ -523,20 +472,21 @@ impl Tafrigh {
         }))
     }
 
-    fn prefetch_download(&self, next: &Queued) -> Option<PrefetchedDownload> {
-        let needed = match &next.destination {
+    /// Starts downloading a remote item ahead of its turn, unless it will not be transcribed.
+    fn prefetch(&self, item: &MediaItem, destination: &Destination) -> Option<PrefetchedDownload> {
+        let needed = match destination {
             Destination::Planned(target) => !(self.skip_existing && target.exists(&self.output)),
             Destination::AfterDownload => true,
             Destination::Unusable(_) => false,
         };
         if !needed
             || matches!(self.backend, Backend::Captions(_))
-            || !matches!(next.item.media, Media::Remote { .. })
+            || !matches!(item.media, Media::Remote { .. })
         {
             return None;
         }
         let ytdlp = self.ytdlp.clone();
-        let item = next.item.clone();
+        let item = item.clone();
         Some(PrefetchedDownload(tokio::spawn(async move {
             ytdlp.download(&item).await
         })))
@@ -550,7 +500,7 @@ impl Tafrigh {
         info: &ItemInfo,
         events: &dyn Progress<Event>,
         download: Option<PrefetchedDownload>,
-        sent: &Notify,
+        sent: &Signal,
     ) -> Result<(Option<PathBuf>, Vec<Segment>)> {
         let transcriber = match &self.backend {
             Backend::Captions(provider) => {
@@ -563,7 +513,7 @@ impl Tafrigh {
         let path = self.media_path(item, info, events, download).await?;
         let progress = |event: TranscribeEvent| {
             if matches!(event, TranscribeEvent::Segmented { .. }) {
-                sent.notify_one();
+                sent.fire();
             }
             events.report(Event::Transcribing {
                 item: info.clone(),
@@ -683,10 +633,36 @@ impl Tafrigh {
 /// Items that may transcribe at once.
 const MAX_TRANSCRIBING: usize = 2;
 
-/// Planned items not started yet.
-struct Queue {
-    items: VecDeque<Queued>,
-    layout: Arc<Mutex<Layout>>,
+/// What the items of one run share.
+struct RunState<'a> {
+    layout: Mutex<Layout>,
+    /// One permit for each item that may work at once.
+    slots: Semaphore,
+    events: &'a dyn Progress<Event>,
+}
+
+/// Signals from one item to the next.
+#[derive(Default)]
+struct Turn {
+    /// The item has started, so the next one may download ahead.
+    started: Signal,
+    /// The item has sent all its audio, or finished without needing to, so the next one may
+    /// start.
+    sent: Signal,
+}
+
+/// An event that may fire before its one waiter waits for it.
+#[derive(Default)]
+struct Signal(Notify);
+
+impl Signal {
+    fn fire(&self) {
+        self.0.notify_one();
+    }
+
+    async fn wait(&self) {
+        self.0.notified().await;
+    }
 }
 
 /// An item waiting to start, with its place in its input.
@@ -706,22 +682,6 @@ enum Destination {
     AfterDownload,
     /// Could not be chosen; the item fails without being transcribed.
     Unusable(Error),
-}
-
-/// An item's work, and for one that transcribes, the signal that it has sent all its audio.
-struct Started<'a> {
-    done: Pin<Box<dyn Future<Output = Done> + Send + 'a>>,
-    sent: Option<Arc<Notify>>,
-}
-
-impl Started<'_> {
-    /// Work that is already over and takes no transcription slot.
-    fn finished(done: Done) -> Self {
-        Self {
-            done: Box::pin(std::future::ready(done)),
-            sent: None,
-        }
-    }
 }
 
 /// An item whose work is over, waiting for its turn to be written and reported.
