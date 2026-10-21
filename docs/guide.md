@@ -28,7 +28,7 @@ Caption cues are converted into the same segments used by all six output formats
 
 Outputs use `<video id>.<format>`, such as `VIDEO_ID.txt` and `VIDEO_ID.words.srt`, with no backend or language suffix. Without `-o`, they go in `--download-dir` or the current directory. With `-o`, they go directly into that output directory. Raw JSON3 and intermediate metadata are temporary; custom yt-dlp output templates do not rename the final transcripts. Samples retain the YouTube link and leave the local media file column empty.
 
-Pass cookies, JavaScript runtime settings and playlist selection through `--yt-dlp-args`. Caption retrieval enforces its download mode, selected track and temporary output paths after those arguments. Audio-processing and Wit options apply only to the Wit backend.
+Pass cookies, JavaScript runtime settings and playlist selection through `--yt-dlp-args`. Caption retrieval enforces its download mode, selected track and temporary output paths after those arguments. The YouTube backend rejects explicit audio-processing and Wit options, `--recursive`, `--ffmpeg` and `--ffprobe`, including their negated forms where available.
 
 ## Inputs and outputs
 
@@ -109,9 +109,9 @@ tafrigh @arabic.args "lecture one.mp3" --output-dir another-folder
 
 Files contain shell-style words: quotes preserve spaces, and `#` starts a comment. They can contain inputs as well as options, and include other argument files with `@relative/path.args`. Nested argument-file paths resolve beside the containing file; media and output paths resolve from the working directory. Cycles and nesting beyond 16 files are rejected. Escape a literal leading `@` with `@@`, for example `tafrigh @@recording.wav --transcriber wit`. These files are parsed as arguments; shell commands and environment-variable substitutions are not executed.
 
-Repeated scalar options use the last value, so command-line flags after an argument file override its settings. Repeated list options such as `--format` and `--wit-token` accumulate. Boolean transcription flags have a `--no-…` counterpart, so `tafrigh @arabic.args lecture.mp3 --no-merge` turns off merging from the preset. Unknown flags and invalid option combinations are rejected before transcription starts.
+Repeated scalar options use the last value, so command-line flags after an argument file override its settings. Repeated list options such as `--format` and `--wit-token` accumulate. Boolean transcription flags have a `--no-…` counterpart, so `tafrigh @arabic.args lecture.mp3 --no-merge` turns off merging from the preset. Unknown flags and invalid option combinations are rejected before transcription starts. Every option supplied on the command line or in an argument file must be used by the selected transcriber; negated flags count too. For example, `--merge` and `--no-merge` both fail with `--transcriber youtube`.
 
-You can also set `TAFRIGH_FFMPEG`, `TAFRIGH_FFPROBE`, and `TAFRIGH_YT_DLP`; explicit flags take precedence over these defaults. Keep tokens in `TAFRIGH_WIT_TOKENS` when using reusable option files. Token environment values are hidden from help and specification output.
+You can also set `TAFRIGH_FFMPEG`, `TAFRIGH_FFPROBE`, and `TAFRIGH_YT_DLP`; explicit flags take precedence over these defaults. Keep tokens in `TAFRIGH_WIT_TOKENS` when using reusable option files. Environment defaults do not count as supplied options and are used only by backends that need them, so Wit tokens and audio-tool paths in your environment do not affect YouTube captions. Token environment values are hidden from help and specification output.
 
 ## CLI specification
 

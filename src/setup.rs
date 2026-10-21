@@ -7,6 +7,7 @@
 //! `--max-chunk` leaves room for Silero's speech padding.
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
@@ -21,7 +22,7 @@ use tafrigh::segment::{FixedWindows, Segmenter};
 use tafrigh::source::{Input, YtDlp};
 use tafrigh_wit::{AudioFormat, Endpoint, WitConfig};
 use tafrigh_youtube::YoutubeCaptions;
-use usage_rs::ValidationError;
+use usage_rs::{Event, Parser, ValidationError};
 
 use crate::cli::{self, Args, Cli, Command, Completions, FormatChoice, Output, Tools, Transcriber};
 
@@ -77,6 +78,70 @@ impl SegmenterConfig {
             Self::FixedWindows(window) => Arc::new(FixedWindows::new(window)?),
         })
     }
+}
+
+impl Plan {
+    /// Parse options and reject explicit flags the selected backend does not use.
+    pub fn parse_from<'v>(argv: &[&'v OsStr]) -> Result<Self, usage_rs::Error<'static, 'v>> {
+        let cli = Cli::parse_from(argv)?;
+        if let Command::Transcribe(args) = &cli.command {
+            validate_backend_options(args.transcriber, argv)?;
+        }
+        Self::try_from(cli).map_err(ValidationError::into_parse_error)
+    }
+}
+
+/// Usage's binding events contain only argv flags, including negations and short forms.
+/// Environment fallbacks and declared defaults never produce these events. Argument files
+/// have already been expanded by `command::parse`.
+fn validate_backend_options<'v>(
+    transcriber: Transcriber,
+    argv: &[&'v OsStr],
+) -> Result<(), usage_rs::Error<'static, 'v>> {
+    let (backend, unused): (&str, &[&'static str]) = match transcriber {
+        Transcriber::Wit => ("wit", &[]),
+        Transcriber::Youtube => (
+            "youtube",
+            &[
+                "--recursive",
+                "--vad",
+                "--max-chunk",
+                "--merge",
+                "--vad-threshold",
+                "--min-speech-ms",
+                "--min-silence-ms",
+                "--speech-pad-ms",
+                "--pad",
+                "--pad-noise",
+                "--resend-gaps",
+                "--on-chunk-error",
+                "--wit-token",
+                "--wit-rps",
+                "--wit-concurrency",
+                "--wit-attempts",
+                "--wit-max-audio",
+                "--wit-endpoint",
+                "--wit-api-url",
+                "--wit-api-version",
+                "--wit-audio",
+                "--ffmpeg",
+                "--ffprobe",
+            ],
+        ),
+    };
+    let mut parser = Parser::new(Cli::command(), argv);
+    while let Some(event) = parser.next_event() {
+        if let Event::Flag { flag, .. } = event?
+            && let Some(&option) = unused
+                .iter()
+                .find(|option| option.strip_prefix("--") == Some(flag.name))
+        {
+            return Err(ValidationError::field(option)
+                .reason(format!("isn't used by --transcriber {backend}"))
+                .into_parse_error());
+        }
+    }
+    Ok(())
 }
 
 impl TryFrom<Cli> for Plan {

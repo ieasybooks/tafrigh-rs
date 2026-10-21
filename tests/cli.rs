@@ -213,6 +213,207 @@ fn youtube_requires_an_exact_language_and_youtube_inputs_before_tool_setup() {
 }
 
 #[test]
+fn wit_options_are_rejected_by_youtube_even_when_the_value_is_a_default() {
+    let cases: &[(&[&str], &str)] = &[
+        (&["--recursive"], "--recursive"),
+        (&["-qr"], "--recursive"),
+        (&["--no-recursive"], "--recursive"),
+        (&["--vad", "silero"], "--vad"),
+        (&["--max-chunk=15.0"], "--max-chunk"),
+        (&["--merge"], "--merge"),
+        (&["--no-merge"], "--merge"),
+        (&["--merge", "--no-merge"], "--merge"),
+        (&["--vad-threshold", "0.5"], "--vad-threshold"),
+        (&["--min-speech-ms", "500"], "--min-speech-ms"),
+        (&["--min-silence-ms", "300"], "--min-silence-ms"),
+        (&["--speech-pad-ms", "250"], "--speech-pad-ms"),
+        (&["--pad", "0.5"], "--pad"),
+        (&["--pad-noise", "-6"], "--pad-noise"),
+        (&["--resend-gaps", "1.0"], "--resend-gaps"),
+        (&["--on-chunk-error", "abort"], "--on-chunk-error"),
+        (&["--wit-token", "x"], "--wit-token"),
+        (&["-w", "x"], "--wit-token"),
+        (&["-wx"], "--wit-token"),
+        (&["--wit-rps", "1.0"], "--wit-rps"),
+        (&["--wit-concurrency", "18"], "--wit-concurrency"),
+        (&["--wit-attempts", "5"], "--wit-attempts"),
+        (&["--wit-max-audio", "60"], "--wit-max-audio"),
+        (&["--wit-endpoint", "dictation"], "--wit-endpoint"),
+        (&["--wit-api-url", "https://api.wit.ai"], "--wit-api-url"),
+        (&["--wit-api-version", "20240304"], "--wit-api-version"),
+        (&["--wit-audio", "opus"], "--wit-audio"),
+        (&["--ffmpeg", "ffmpeg"], "--ffmpeg"),
+        (&["--ffprobe", "ffprobe"], "--ffprobe"),
+    ];
+    for &(flags, option) in cases {
+        let output = command()
+            .env("PATH", "")
+            .env("TAFRIGH_WIT_TOKENS", "environment-token")
+            .args([
+                "https://youtu.be/video",
+                "--transcriber",
+                "youtube",
+                "-l",
+                "ar",
+            ])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{flags:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains(&format!("'{option}': isn't used by --transcriber youtube")),
+            "{flags:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stderr(&output).contains("environment-token"));
+
+        let output = command()
+            .env("PATH", "")
+            .args([
+                "recording.mp3",
+                "--transcriber",
+                "wit",
+                "-w",
+                "test",
+                "-l",
+                "en",
+            ])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{flags:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("required program"),
+            "{flags:?}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn shared_options_and_flag_like_values_work_with_both_backends() {
+    for (transcriber, input) in [
+        ("wit", "recording.mp3"),
+        ("youtube", "https://youtu.be/video"),
+    ] {
+        let output = command()
+            .env("PATH", "")
+            .env("TAFRIGH_WIT_TOKENS", "test")
+            .args([
+                input,
+                "--transcriber",
+                transcriber,
+                "--language",
+                "en-US",
+                "-q",
+                "-vv",
+                "-o",
+                "out",
+                "--output-mode",
+                "flat",
+                "-f",
+                "srt",
+                "--words",
+                "--min-words",
+                "2",
+                "--keep-uncompacted",
+                "--skip-existing",
+                "--sample",
+                "1",
+                "--download-dir",
+                "downloads",
+                "--save-metadata",
+                "--yt-dlp",
+                "missing-yt-dlp",
+                "--yt-dlp-args",
+                "--ffmpeg ignored --merge",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{transcriber}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("required program"),
+            "{transcriber}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn argument_file_options_are_checked_against_the_final_backend() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("preset.args"),
+        "--transcriber wit --language ar --no-merge",
+    )
+    .unwrap();
+    for transcriber in ["youtube", "wit"] {
+        let output = command()
+            .current_dir(dir.path())
+            .env("PATH", "")
+            .env("TAFRIGH_WIT_TOKENS", "test")
+            .args([
+                "@preset.args",
+                "https://youtu.be/video",
+                "--transcriber",
+                transcriber,
+            ])
+            .output()
+            .unwrap();
+        if transcriber == "youtube" {
+            assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+            assert!(
+                stderr(&output).contains("'--merge': isn't used by --transcriber youtube"),
+                "{}",
+                stderr(&output)
+            );
+        } else {
+            assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+            assert!(
+                stderr(&output).contains("required program"),
+                "{}",
+                stderr(&output)
+            );
+        }
+    }
+}
+
+#[test]
+fn unknown_options_are_rejected_for_both_backends() {
+    for transcriber in ["wit", "youtube"] {
+        let output = command()
+            .env("PATH", "")
+            .args([
+                "https://youtu.be/video",
+                "--transcriber",
+                transcriber,
+                "-l",
+                "ar",
+                "--typo",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(stderr(&output).contains("--typo"), "{}", stderr(&output));
+    }
+}
+
+#[test]
 fn completion_scripts_cover_supported_shells_and_run_without_setup() {
     for shell in ["bash", "elvish", "fish", "nu", "powershell", "zsh"] {
         let output = command()
@@ -523,6 +724,8 @@ fi
         let mut cmd = command();
         cmd.current_dir(dir)
             .env("PATH", "")
+            .env("TAFRIGH_FFMPEG", "missing-ffmpeg")
+            .env("TAFRIGH_FFPROBE", "missing-ffprobe")
             .env("TAFRIGH_TEST_YTDLP_LOG", dir.join("calls.log"))
             .env("TAFRIGH_TEST_CAPTIONS", scenario)
             .args([
@@ -531,10 +734,6 @@ fi
                 "youtube",
                 "--language",
                 "ar",
-                "--ffmpeg",
-                "missing-ffmpeg",
-                "--wit-api-url",
-                "http://127.0.0.1:9",
                 "--quiet",
                 "--yt-dlp",
             ])
@@ -593,6 +792,30 @@ fi
             assert!(!Path::new(path).exists(), "temporary metadata remains");
         }
         assert!(!calls.contains("bestaudio"));
+    }
+
+    #[test]
+    fn unused_wit_environment_works_but_an_explicit_token_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = caption_command(dir.path(), "timed")
+            .env("TAFRIGH_WIT_TOKENS", "unused-token")
+            .args(["-f", "txt"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(dir.path().join("video.txt").is_file());
+
+        let output = caption_command(dir.path(), "timed")
+            .env("TAFRIGH_WIT_TOKENS", "unused-token")
+            .args(["-w", "x"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            stderr(&output).contains("'--wit-token': isn't used by --transcriber youtube"),
+            "{}",
+            stderr(&output)
+        );
     }
 
     #[test]

@@ -34,7 +34,6 @@ Boolean transcription flags accept a --no- prefix, such as --no-merge, to overri
     arg_required_else_help,
     unknown_flags = "error",
     max_term_width = 100,
-    try_into = crate::setup::Plan,
     exit_code(0, "Success"),
     exit_code(1, "Setup, filesystem or other runtime error"),
     exit_code(2, "Invalid arguments"),
