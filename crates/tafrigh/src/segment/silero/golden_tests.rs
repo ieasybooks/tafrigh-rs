@@ -120,10 +120,10 @@ fn segmenter_matches_python_end_to_end() {
     let p = params(&golden["short"]["params"]);
     let config = SileroConfig {
         threshold: p.threshold,
-        min_speech_ms: p.min_speech_ms,
-        max_speech_s: p.max_speech_s,
-        min_silence_ms: p.min_silence_ms,
-        speech_pad_ms: p.speech_pad_ms,
+        min_speech: Duration::from_millis(p.min_speech_ms.into()),
+        max_speech: Duration::from_secs_f64(p.max_speech_s),
+        min_silence: Duration::from_millis(p.min_silence_ms.into()),
+        speech_pad: Duration::from_millis(p.speech_pad_ms.into()),
     };
     let segmenter = SileroSegmenter::new(config).unwrap();
     let mut session = segmenter.begin().unwrap();

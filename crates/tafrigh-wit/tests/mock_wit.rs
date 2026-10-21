@@ -369,7 +369,7 @@ async fn transcriber(server: &MockServer, options: ChunkOptions) -> ChunkedTrans
         .await
         .unwrap();
     let config = SileroConfig {
-        speech_pad_ms: 60,
+        speech_pad: Duration::from_millis(60),
         ..SileroConfig::default()
     };
     let segmenter = SileroSegmenter::new(config).unwrap();
@@ -439,7 +439,10 @@ async fn merges_chunks_and_pads_with_lead_in() {
 
     let options = ChunkOptions {
         merge: true,
-        padding: Some(tafrigh::audio::Padding::white_noise(1.0, -30.0)),
+        padding: Some(tafrigh::audio::Padding::white_noise(
+            Duration::from_secs(1),
+            -30.0,
+        )),
         ..ChunkOptions::default()
     };
     let segments = transcriber(&server, options)
@@ -485,7 +488,7 @@ async fn resends_speech_the_recognizer_skipped() {
     // With 0.5s padding, the words leave 1.5s, 1.0s, 1.7s and 2.1s of the four chunks
     // uncovered: all but the second reach 1.2s and go out again.
     let options = ChunkOptions {
-        resend_gaps: Some(1.2),
+        resend_gaps: Some(Duration::from_millis(1200)),
         ..ChunkOptions::default()
     };
     let segments = transcriber(&server, options)
@@ -580,25 +583,26 @@ async fn chunk_failures_abort_or_skip() {
 #[tokio::test]
 async fn audio_limits_depend_on_the_endpoint() {
     let server = MockServer::start().await;
-    let options = |max_chunk_s| ChunkOptions {
-        max_chunk_s,
-        padding: Some(tafrigh::audio::Padding::silence(1.0)),
+    let options = |max_chunk| ChunkOptions {
+        max_chunk,
+        padding: Some(tafrigh::audio::Padding::silence(Duration::from_secs(1))),
         ..ChunkOptions::default()
     };
-    let build = |config: WitConfig, max_chunk_s| async move {
+    let build = |config: WitConfig, seconds| async move {
+        let max_chunk = Duration::from_secs(seconds);
         let recognizer = WitRecognizer::new(config).await.unwrap();
-        let segmenter = tafrigh::segment::FixedWindows::new(max_chunk_s).unwrap();
-        ChunkedTranscriber::new(segmenter, recognizer, options(max_chunk_s))
+        let segmenter = tafrigh::segment::FixedWindows::new(max_chunk).unwrap();
+        ChunkedTranscriber::new(segmenter, recognizer, options(max_chunk))
     };
 
     // Dictation: up to 60s per request.
-    assert!(build(config(&server, &["t"]), 58.0).await.is_ok());
-    let err = build(config(&server, &["t"]), 59.0).await.err().unwrap();
+    assert!(build(config(&server, &["t"]), 58).await.is_ok());
+    let err = build(config(&server, &["t"]), 59).await.err().unwrap();
     assert!(err.to_string().contains("60.00s limit"), "{err}");
 
     // Speech: up to 20s per request.
     let mut speech = config(&server, &["t"]);
     speech.endpoint = Endpoint::Speech;
-    let err = build(speech, 19.0).await.err().unwrap();
+    let err = build(speech, 19).await.err().unwrap();
     assert!(err.to_string().contains("20.00s limit"), "{err}");
 }

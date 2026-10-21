@@ -21,12 +21,12 @@ impl Endpoint {
         }
     }
 
-    /// Longest audio per request used when [`WitConfig::max_audio_seconds`] is unset:
-    /// 60s for dictation (what tafrigh's JS client sends), 20s for speech.
-    pub fn default_max_audio_seconds(self) -> f64 {
+    /// Longest audio per request used when [`WitConfig::max_audio`] is unset: 60s for
+    /// dictation (what tafrigh's JS client sends), 20s for speech.
+    pub fn default_max_audio(self) -> Duration {
         match self {
-            Self::Dictation => 60.0,
-            Self::Speech => 20.0,
+            Self::Dictation => Duration::from_mins(1),
+            Self::Speech => Duration::from_secs(20),
         }
     }
 }
@@ -61,8 +61,8 @@ pub struct WitConfig {
     /// Time a request may take beyond twice its audio's duration; see
     /// [`WitConfig::timeout_for`].
     pub request_timeout_base: Duration,
-    /// Longest audio per request; `None` uses [`Endpoint::default_max_audio_seconds`].
-    pub max_audio_seconds: Option<f64>,
+    /// Longest audio per request; `None` uses [`Endpoint::default_max_audio`].
+    pub max_audio: Option<Duration>,
 }
 
 impl WitConfig {
@@ -89,24 +89,22 @@ impl WitConfig {
             retry_max_delay: Duration::from_secs(30),
             request_timeout: Duration::from_mins(1),
             request_timeout_base: Duration::from_secs(15),
-            max_audio_seconds: None,
+            max_audio: None,
         }
     }
 
     /// Longest audio per request in effect.
-    pub fn max_audio(&self) -> f64 {
-        self.max_audio_seconds
-            .unwrap_or_else(|| self.endpoint.default_max_audio_seconds())
+    pub fn audio_limit(&self) -> Duration {
+        self.max_audio
+            .unwrap_or_else(|| self.endpoint.default_max_audio())
     }
 
-    /// Timeout for a request carrying `audio_seconds` of audio: [`Self::request_timeout_base`]
-    /// plus twice the audio's duration, at most [`Self::request_timeout`]. Wit answers at about
-    /// the pace of the audio, so a request far past that has stalled and is better retried.
-    pub fn timeout_for(&self, audio_seconds: f64) -> Duration {
-        let scaled =
-            Duration::try_from_secs_f64(2.0 * audio_seconds.max(0.0)).unwrap_or(Duration::MAX);
+    /// Timeout for a request carrying `audio`: [`Self::request_timeout_base`] plus twice the
+    /// audio's duration, at most [`Self::request_timeout`]. Wit answers at about the pace of
+    /// the audio, so a request far past that has stalled and is better retried.
+    pub fn timeout_for(&self, audio: Duration) -> Duration {
         self.request_timeout_base
-            .saturating_add(scaled)
+            .saturating_add(audio.saturating_mul(2))
             .min(self.request_timeout)
     }
 
@@ -128,8 +126,7 @@ impl WitConfig {
         if self.max_in_flight_per_token == 0 || self.max_attempts == 0 {
             return fail("in-flight requests and attempts must be at least 1");
         }
-        let max_audio = self.max_audio();
-        if !(max_audio.is_finite() && max_audio > 0.0) {
+        if self.audio_limit().is_zero() {
             return fail("the maximum audio per request must be positive");
         }
         Ok(())
@@ -151,7 +148,7 @@ impl fmt::Debug for WitConfig {
             .field("retry_max_delay", &self.retry_max_delay)
             .field("request_timeout", &self.request_timeout)
             .field("request_timeout_base", &self.request_timeout_base)
-            .field("max_audio_seconds", &self.max_audio_seconds)
+            .field("max_audio", &self.max_audio)
             .finish()
     }
 }
@@ -182,17 +179,18 @@ mod tests {
         assert!(config.validate().is_err());
         let mut config = WitConfig::new(["t"]);
         config.endpoint = Endpoint::Speech;
-        assert!((config.max_audio() - 20.0).abs() < f64::EPSILON);
-        config.max_audio_seconds = Some(-1.0);
+        assert_eq!(config.audio_limit(), Duration::from_secs(20));
+        config.max_audio = Some(Duration::ZERO);
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn timeouts_scale_with_audio() {
         let config = WitConfig::new(["t"]);
-        assert_eq!(config.timeout_for(4.0), Duration::from_secs(23));
-        assert_eq!(config.timeout_for(16.0), Duration::from_secs(47));
-        assert_eq!(config.timeout_for(60.0), Duration::from_mins(1));
-        assert_eq!(config.timeout_for(f64::NAN), Duration::from_secs(15));
+        let timeout = |seconds| config.timeout_for(Duration::from_secs(seconds));
+        assert_eq!(timeout(0), Duration::from_secs(15));
+        assert_eq!(timeout(4), Duration::from_secs(23));
+        assert_eq!(timeout(16), Duration::from_secs(47));
+        assert_eq!(timeout(60), Duration::from_mins(1));
     }
 }

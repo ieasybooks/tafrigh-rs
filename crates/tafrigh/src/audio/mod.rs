@@ -3,6 +3,8 @@
 mod decode;
 mod padding;
 
+use std::time::Duration;
+
 pub use decode::{Decoder, PcmReader};
 pub use padding::{Padding, PaddingFill};
 
@@ -17,6 +19,11 @@ pub(crate) fn samples_to_seconds(samples: usize) -> f64 {
 /// Number of samples in `seconds` at [`SAMPLE_RATE`], rounded; negative input gives 0.
 pub(crate) fn seconds_to_samples(seconds: f64) -> usize {
     (seconds.max(0.0) * f64::from(SAMPLE_RATE)).round() as usize
+}
+
+/// Number of samples in `duration` at [`SAMPLE_RATE`], rounded.
+pub(crate) fn duration_to_samples(duration: Duration) -> usize {
+    seconds_to_samples(duration.as_secs_f64())
 }
 
 /// A piece of the source audio sent to a recognizer.
@@ -36,8 +43,8 @@ pub struct AudioChunk {
 
 impl AudioChunk {
     /// Duration of the audio actually sent, padding included.
-    pub fn audio_duration(&self) -> f64 {
-        samples_to_seconds(self.samples.len())
+    pub fn audio_duration(&self) -> Duration {
+        Duration::from_secs_f64(samples_to_seconds(self.samples.len()))
     }
 
     /// The samples as a complete WAV file (PCM, mono, 16-bit, 16 kHz).

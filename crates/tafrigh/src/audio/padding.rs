@@ -1,12 +1,14 @@
+use std::time::Duration;
+
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
 
-use super::{samples_to_seconds, seconds_to_samples};
+use super::{duration_to_samples, samples_to_seconds};
 
 /// Extra audio added on both sides of every chunk before recognition.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Padding {
-    /// Length added on each side, in seconds.
-    pub seconds: f64,
+    /// Length added on each side.
+    pub length: Duration,
     /// What the added audio contains.
     pub fill: PaddingFill,
 }
@@ -24,18 +26,18 @@ pub enum PaddingFill {
 }
 
 impl Padding {
-    /// Pads with `seconds` of silence on each side.
-    pub fn silence(seconds: f64) -> Self {
+    /// Pads with `length` of silence on each side.
+    pub fn silence(length: Duration) -> Self {
         Self {
-            seconds,
+            length,
             fill: PaddingFill::Silence,
         }
     }
 
-    /// Pads with `seconds` of white noise peaking at `dbfs` on each side.
-    pub fn white_noise(seconds: f64, dbfs: f64) -> Self {
+    /// Pads with `length` of white noise peaking at `dbfs` on each side.
+    pub fn white_noise(length: Duration, dbfs: f64) -> Self {
         Self {
-            seconds,
+            length,
             fill: PaddingFill::WhiteNoise { dbfs },
         }
     }
@@ -43,7 +45,7 @@ impl Padding {
     /// Returns the padded samples and the lead-in duration in seconds. `seed` makes the noise
     /// reproducible.
     pub fn apply(&self, samples: &[i16], seed: u64) -> (Vec<i16>, f64) {
-        let pad = seconds_to_samples(self.seconds);
+        let pad = duration_to_samples(self.length);
         if pad == 0 {
             return (samples.to_vec(), 0.0);
         }
@@ -70,7 +72,7 @@ mod tests {
 
     #[test]
     fn pads_both_sides() {
-        let (out, lead_in) = Padding::silence(0.001).apply(&[5, 6], 0);
+        let (out, lead_in) = Padding::silence(Duration::from_millis(1)).apply(&[5, 6], 0);
         assert_eq!(
             out,
             [0; 16]
@@ -82,9 +84,13 @@ mod tests {
         );
         assert!((lead_in - 0.001).abs() < 1e-12);
 
-        let (noisy, _) = Padding::white_noise(0.01, -6.0).apply(&[0; 10], 7);
+        let ten_ms = Duration::from_millis(10);
+        let (noisy, _) = Padding::white_noise(ten_ms, -6.0).apply(&[0; 10], 7);
         let peak = noisy.iter().map(|s| s.unsigned_abs()).max().unwrap();
         assert!(peak > 0 && f64::from(peak) <= 32767.0 * 0.502, "{peak}");
-        assert_eq!(noisy, Padding::white_noise(0.01, -6.0).apply(&[0; 10], 7).0);
+        assert_eq!(
+            noisy,
+            Padding::white_noise(ten_ms, -6.0).apply(&[0; 10], 7).0
+        );
     }
 }

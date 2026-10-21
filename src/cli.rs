@@ -473,7 +473,13 @@ fn validate(cli: &Cli) -> Result<(), ValidationError> {
         ("--pad", segmentation.pad, true),
         ("--resend-gaps", segmentation.resend_gaps, true),
         ("--wit-rps", args.wit.requests_per_second, false),
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        args.wit
+            .max_audio
+            .map(|value| ("--wit-max-audio", value, false)),
+    ) {
         if !value.is_finite() || value < 0.0 || (!allow_zero && value == 0.0) {
             return Err(ValidationError::field(name)
                 .value(value.to_string())
@@ -515,17 +521,15 @@ fn validate(cli: &Cli) -> Result<(), ValidationError> {
         .value("0")
         .reason("must be at least 1"));
     }
-    let max_audio = args.wit.config(segmentation.request_seconds()).max_audio();
-    if !max_audio.is_finite() || max_audio <= 0.0 {
-        return Err(ValidationError::field("--wit-max-audio")
-            .value(max_audio.to_string())
-            .reason("must be finite and positive"));
-    }
-    if segmentation.request_seconds() > max_audio + 1e-9 {
+    let max_audio = args
+        .wit
+        .config(segmentation.request_seconds())
+        .audio_limit();
+    if segmentation.request_seconds() > max_audio.as_secs_f64() + 1e-9 {
         return Err(ValidationError::field("--max-chunk")
             .value(segmentation.max_chunk.to_string())
             .reason(format!(
-                "chunk plus padding exceeds the {max_audio}s Wit audio limit"
+                "chunk plus padding exceeds the {max_audio:?} Wit audio limit"
             )));
     }
     Ok(())

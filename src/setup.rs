@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, bail};
 use tafrigh::ChunkOptions;
@@ -66,12 +67,12 @@ impl Segmentation {
         Ok(match self.vad {
             cli::Vad::Silero => Arc::new(SileroSegmenter::new(SileroConfig {
                 threshold: self.vad_threshold,
-                min_speech_ms: self.min_speech_ms,
-                max_speech_s: self.max_chunk,
-                min_silence_ms: self.min_silence_ms,
-                speech_pad_ms: self.speech_pad_ms,
+                min_speech: Duration::from_millis(self.min_speech_ms.into()),
+                max_speech: seconds(self.max_chunk),
+                min_silence: Duration::from_millis(self.min_silence_ms.into()),
+                speech_pad: Duration::from_millis(self.speech_pad_ms.into()),
             })?),
-            cli::Vad::None => Arc::new(FixedWindows::new(self.max_chunk)?),
+            cli::Vad::None => Arc::new(FixedWindows::new(seconds(self.max_chunk))?),
         })
     }
 
@@ -83,17 +84,23 @@ impl Segmentation {
     /// Chunking options matching the segmenter.
     pub fn chunk_options(&self) -> ChunkOptions {
         ChunkOptions {
-            max_chunk_s: self.max_chunk,
+            max_chunk: seconds(self.max_chunk),
             merge: self.merge,
             padding: (self.pad > 0.0).then(|| match self.pad_noise {
-                Some(dbfs) => Padding::white_noise(self.pad, dbfs),
-                None => Padding::silence(self.pad),
+                Some(dbfs) => Padding::white_noise(seconds(self.pad), dbfs),
+                None => Padding::silence(seconds(self.pad)),
             }),
             on_error: self.on_chunk_error.into(),
             max_in_flight: None,
-            resend_gaps: (self.resend_gaps > 0.0).then_some(self.resend_gaps),
+            resend_gaps: (self.resend_gaps > 0.0).then(|| seconds(self.resend_gaps)),
         }
     }
+}
+
+/// `value` seconds as a duration, saturating when too long to represent. Negative and NaN
+/// values are rejected while parsing.
+fn seconds(value: f64) -> Duration {
+    Duration::try_from_secs_f64(value).unwrap_or(Duration::MAX)
 }
 
 impl From<cli::OnChunkError> for tafrigh::OnChunkError {
@@ -118,7 +125,7 @@ impl Wit {
             .concurrency
             .unwrap_or_else(|| default_concurrency(self.requests_per_second, request_seconds));
         config.max_attempts = self.attempts;
-        config.max_audio_seconds = self.max_audio;
+        config.max_audio = self.max_audio.map(seconds);
         config
     }
 }

@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -8,7 +9,8 @@ use tokio::sync::mpsc;
 
 use super::{ChunkRecognizer, Recognition, Transcriber};
 use crate::audio::{
-    AudioChunk, Decoder, Padding, SAMPLE_RATE, samples_to_seconds, seconds_to_samples,
+    AudioChunk, Decoder, Padding, SAMPLE_RATE, duration_to_samples, samples_to_seconds,
+    seconds_to_samples,
 };
 use crate::error::task_result;
 use crate::event::{Progress, TranscribeEvent};
@@ -28,11 +30,11 @@ pub enum OnChunkError {
 /// Options for [`ChunkedTranscriber`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkOptions {
-    /// Longest chunk sent to the recognizer, in seconds, before padding. Spans longer than
-    /// this are split (configure the segmenter with the same limit to split at pauses).
-    pub max_chunk_s: f64,
-    /// Merge consecutive speech spans up to `max_chunk_s`: fewer requests and more context
-    /// per request, but longer segments.
+    /// Longest chunk sent to the recognizer, before padding. Spans longer than this are split
+    /// (configure the segmenter with the same limit to split at pauses).
+    pub max_chunk: Duration,
+    /// Merge consecutive speech spans up to `max_chunk`: fewer requests and more context per
+    /// request, but longer segments.
     pub merge: bool,
     /// Audio added on both sides of each chunk; 0.5 s of silence by default, because
     /// recognizers such as Wit drop words that start or end right at the chunk edge.
@@ -42,22 +44,22 @@ pub struct ChunkOptions {
     /// Requests in flight at once. Defaults to the recognizer's
     /// [`ChunkRecognizer::max_in_flight`].
     pub max_in_flight: Option<usize>,
-    /// Resend speech the recognizer skipped: when a chunk's words leave at least this many
-    /// seconds of detected speech uncovered, that stretch goes out again as its own request.
-    /// Recognizers such as Wit sometimes stop transcribing partway through a chunk. Needs word
-    /// timings; `None` disables.
-    pub resend_gaps: Option<f64>,
+    /// Resend speech the recognizer skipped: when a chunk's words leave at least this much
+    /// detected speech uncovered, that stretch goes out again as its own request. Recognizers
+    /// such as Wit sometimes stop transcribing partway through a chunk. Needs word timings;
+    /// `None` disables.
+    pub resend_gaps: Option<Duration>,
 }
 
 impl Default for ChunkOptions {
     fn default() -> Self {
         Self {
-            max_chunk_s: 15.0,
+            max_chunk: Duration::from_secs(15),
             merge: false,
-            padding: Some(Padding::silence(0.5)),
+            padding: Some(Padding::silence(Duration::from_millis(500))),
             on_error: OnChunkError::Abort,
             max_in_flight: None,
-            resend_gaps: Some(1.0),
+            resend_gaps: Some(Duration::from_secs(1)),
         }
     }
 }
@@ -94,31 +96,28 @@ impl ChunkedTranscriber {
     ) -> Result<Self> {
         let segmenter: Arc<dyn Segmenter> = Arc::new(segmenter);
         let recognizer: Arc<dyn ChunkRecognizer> = Arc::new(recognizer);
-        if !options.max_chunk_s.is_finite() || options.max_chunk_s <= 0.0 {
-            return Err(Error::Config(
-                "maximum chunk duration must be positive".into(),
-            ));
-        }
-        if seconds_to_samples(options.max_chunk_s) == 0 {
+        if duration_to_samples(options.max_chunk) == 0 {
             return Err(Error::Config(
                 "maximum chunk duration must be at least one sample".into(),
             ));
         }
         if let Some(gap) = options.resend_gaps
-            && !(gap.is_finite() && seconds_to_samples(gap) > 0)
+            && duration_to_samples(gap) == 0
         {
             return Err(Error::Config(
-                "the gap that triggers a resend must be positive".into(),
+                "the gap that triggers a resend must be at least one sample".into(),
             ));
         }
-        let padding = options.padding.map_or(0.0, |p| p.seconds.max(0.0));
+        let padding = options
+            .padding
+            .map_or(Duration::ZERO, |p| p.length)
+            .saturating_mul(2);
         if let Some(limit) = recognizer.max_audio_duration()
-            && options.max_chunk_s + 2.0 * padding > limit + 1e-9
+            && options.max_chunk.saturating_add(padding) > limit
         {
             return Err(Error::Config(format!(
-                "chunks of {:.2}s plus {:.2}s padding exceed the recognizer's {limit:.2}s limit",
-                options.max_chunk_s,
-                2.0 * padding
+                "chunks of {:.2?} plus {padding:.2?} padding exceed the recognizer's {limit:.2?} limit",
+                options.max_chunk,
             )));
         }
         Ok(Self {
@@ -221,14 +220,14 @@ impl Transcriber for ChunkedTranscriber {
             path: media.to_owned(),
             segmenter: self.segmenter.clone(),
             chunker: Chunker::new(
-                seconds_to_samples(self.options.max_chunk_s),
+                duration_to_samples(self.options.max_chunk),
                 self.options.merge,
                 self.options.padding,
             ),
             tx,
         };
         let producer_task = tokio::task::spawn_blocking(move || producer.run());
-        let resend_gap = self.options.resend_gaps.map(seconds_to_samples);
+        let resend_gap = self.options.resend_gaps.map(duration_to_samples);
 
         let mut inflight = FuturesUnordered::new();
         let mut segments: Vec<(usize, Segment)> = Vec::new();
@@ -768,6 +767,20 @@ mod tests {
         }
     }
 
+    /// Accepts up to its duration of audio per request.
+    struct LimitedRecognizer(Duration);
+
+    #[async_trait::async_trait]
+    impl ChunkRecognizer for LimitedRecognizer {
+        async fn recognize(&self, _chunk: &AudioChunk) -> Result<Recognition, BoxError> {
+            Ok(Recognition::default())
+        }
+
+        fn max_audio_duration(&self) -> Option<Duration> {
+            Some(self.0)
+        }
+    }
+
     fn word(start: f64, end: f64, text: &str) -> Word {
         Word {
             start,
@@ -957,7 +970,8 @@ mod tests {
     #[test]
     fn resends_a_padded_slice_of_the_chunk() {
         let chunk = request(50 * S, 4 * S, 100, &[(50 * S, 54 * S)]);
-        let resend = chunk.resend(span(51 * S, 53 * S), Some(Padding::silence(0.5)));
+        let half_second = Padding::silence(Duration::from_millis(500));
+        let resend = chunk.resend(span(51 * S, 53 * S), Some(half_second));
         assert_eq!(resend.chunk.index, 3);
         assert!((resend.chunk.start - 51.0).abs() < 1e-9);
         assert!((resend.chunk.end - 53.0).abs() < 1e-9);
@@ -976,7 +990,8 @@ mod tests {
     #[test]
     fn cutting_stops_at_the_first_request_that_cannot_be_sent() {
         // One second of audio in 1ms chunks would be a thousand padded requests.
-        let mut chunker = Chunker::new(S / 1000, false, Some(Padding::silence(0.5)));
+        let half_second = Padding::silence(Duration::from_millis(500));
+        let mut chunker = Chunker::new(S / 1000, false, Some(half_second));
         chunker.add_audio(&vec![0; S]);
         let mut sent = 0;
         let result = chunker.cut(std::iter::once(span(0, S)), |_| {
@@ -989,16 +1004,34 @@ mod tests {
 
     #[test]
     fn rejects_chunk_limit_below_one_sample() {
-        let segmenter = crate::segment::FixedWindows::new(1.0).unwrap();
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(1)).unwrap();
         let error = ChunkedTranscriber::new(
             segmenter,
             NoopRecognizer,
             ChunkOptions {
-                max_chunk_s: 1e-6,
+                max_chunk: Duration::from_micros(1),
                 ..ChunkOptions::default()
             },
         )
         .unwrap_err();
         assert!(error.to_string().contains("at least one sample"));
+    }
+
+    #[test]
+    fn rejects_padding_too_long_to_double() {
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(15)).unwrap();
+        let error = ChunkedTranscriber::new(
+            segmenter,
+            LimitedRecognizer(Duration::from_mins(1)),
+            ChunkOptions {
+                padding: Some(Padding::silence(Duration::MAX)),
+                ..ChunkOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("exceed the recognizer's"),
+            "{error}"
+        );
     }
 }
