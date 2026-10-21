@@ -38,8 +38,8 @@ workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube"]
-default-members = [".", "crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube"]
+members = ["crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere"]
+default-members = [".", "crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere"]
 
 [workspace.package]
 edition = "2024"

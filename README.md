@@ -60,6 +60,8 @@ tafrigh completions zsh --install
 
 Install the configured tools with mise, then run the checks from the repository root:
 
+Workspace builds include the local Cohere recognizer, which compiles transcribe.cpp and needs CMake (pinned in mise) and a C++ compiler. Cohere model weights are downloaded separately and are not needed for ordinary tests. See [third-party notices](crates/tafrigh-cohere/THIRD-PARTY-LICENSES.md) for the native dependencies.
+
 ```sh
 mise install
 cargo fmt --all --check

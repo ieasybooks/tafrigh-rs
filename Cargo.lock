@@ -2037,6 +2037,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tafrigh-cohere"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "tafrigh",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "transcribe-cpp",
+]
+
+[[package]]
 name = "tafrigh-wit"
 version = "0.3.0"
 dependencies = [
@@ -2489,6 +2504,27 @@ dependencies = [
  "float-ord",
  "rayon",
  "tract-nnef",
+]
+
+[[package]]
+name = "transcribe-cpp"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6cad85eeb846a7064891c8b49b92a57a0f2d4dd089104cb199608b23043555e"
+dependencies = [
+ "log",
+ "thiserror",
+ "transcribe-cpp-sys",
+]
+
+[[package]]
+name = "transcribe-cpp-sys"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f0976932ee2a0d9bcfb7a90947d0a73771cee383b163bd7189a8e0d67da1157"
+dependencies = [
+ "cmake",
+ "serde_json",
 ]
 
 [[package]]

@@ -171,6 +171,26 @@ To process files, folders and URLs into transcript files, use `tafrigh::Tafrigh:
 
 Custom chunk recognizers declare whether their results carry word timings through `ChunkRecognizer::word_timings()` (true by default). For a recognizer without word timings, set `ChunkOptions::resend_gaps` to `None`; `ChunkedTranscriber::new` rejects gap resends because it cannot distinguish recognized speech from missed speech without word timings. Untimed text becomes one segment covering its chunk.
 
+The `tafrigh-cohere` library recognizes Arabic (`ar`, the default) or English (`en`) locally with Cohere Transcribe Arabic 07-2026. Load a local `.gguf` file and pair it with the same core pipeline:
+
+```rust
+use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
+use tafrigh::{ChunkOptions, ChunkedTranscriber, NoProgress, Transcriber};
+use tafrigh_cohere::{CohereConfig, CohereRecognizer};
+
+let recognizer = CohereRecognizer::load(CohereConfig::new("model.gguf")).await?;
+let segmenter = SileroSegmenter::new(SileroConfig::default())?;
+let options = ChunkOptions { resend_gaps: None, ..ChunkOptions::default() };
+let transcriber = ChunkedTranscriber::new(segmenter, recognizer, options)?;
+let segments = transcriber.transcribe("lecture.mp3".as_ref(), &NoProgress).await?;
+```
+
+Cohere returns punctuated text with one segment per chunk and no word timings. Audio including padding must be shorter than 400 seconds: transcribe.cpp advertises 400 but rejects exactly that, so the limit is one sample less. Chunks shorter than 10 ms, which the model can't accept, give no text. The normal 15-second chunk policy still applies. GPU builds use Metal on Apple or the crate's `cuda` feature on NVIDIA; CPU works elsewhere. `Device::Auto` attempts the available GPU and retries loading on CPU if needed, `Device::Cpu` selects CPU, and `Device::Gpu` requires a GPU. `Device::GpuIndex(N)` selects the zero-based Nth GPU in transcribe.cpp's GPU list and fails if unavailable. `backend()` and `device_name()` show the actual choice. Model or session load failures can trigger automatic CPU fallback; inference failures are reported.
+
+CUDA builds need the NVIDIA CUDA toolkit and its runtime libraries. CMake locates them through its normal toolkit search, including `CUDAToolkit_ROOT` or `CUDA_PATH` for a nonstandard installation. The crate supplies the CUDA runtime, cuBLAS and driver link dependencies omitted by transcribe-cpp-sys 0.4.0's static-library manifest. Cross-compilation and custom static CUDA-runtime configurations are not validated.
+
+Concurrent Cohere calls share one session and collect into batches up to `CohereConfig::batch_size` (8 by default); a partial batch flushes after `batch_wait` (10 ms). CPU runs one request at a time. A larger GPU batch needs more memory and can change numerical results. When the model repeats itself or reaches its token limit, the chunk keeps the text produced until then (transcribe.cpp drops the repeats) and a warning is logged. The small `cargo run -p tafrigh-cohere --release --example transcribe -- MODEL.gguf OUTPUT_DIR INPUT...` example writes text for files and folders using Silero and the core pipeline; add `--device gpu`, `--batch-size 8`, `--threads 4`, or `--chunk-seconds 30 --merge` to compare settings.
+
 For captions, construct `tafrigh_youtube::YoutubeCaptions` and pass it to `Tafrigh::captions`, then configure the same output writer and yt-dlp options. Its `run` method accepts YouTube URLs and reports per-item failures through the same `RunReport`.
 
 ```rust
@@ -190,6 +210,7 @@ YouTube validation, track selection, JSON3 parsing and word timings live in `taf
 |---|---|
 | [`tafrigh`](https://crates.io/crates/tafrigh) | the core: decoding, Silero VAD, chunking, output formats |
 | [`tafrigh-wit`](https://crates.io/crates/tafrigh-wit) | the Wit.ai recognizer |
+| [`tafrigh-cohere`](../crates/tafrigh-cohere) | local Cohere Transcribe Arabic through transcribe.cpp |
 | [`tafrigh-youtube`](../crates/tafrigh-youtube) | existing YouTube captions through yt-dlp |
 | [`tafrigh-cli`](https://crates.io/crates/tafrigh-cli) | the `tafrigh` command |
 
@@ -206,7 +227,7 @@ The Rust version is pinned in `rust-toolchain.toml`. Run `mise install` from the
 
 ffmpeg tracks the latest stable release, while yt-dlp tracks the latest [official nightly build](https://github.com/yt-dlp/yt-dlp#update-channels), including prereleases, through a mise backend alias. Run `mise upgrade ffmpeg yt-dlp` to update installed copies; the other tools keep their configured version requirements. CI installs the same media tools through mise.
 
-The root package is `tafrigh-cli`, with its source in `src/`. The `tafrigh`, `tafrigh-wit` and `tafrigh-youtube` libraries live under `crates/`. All four packages are workspace members and are selected by default when running Cargo from the root. See [AGENTS.md](../AGENTS.md) for verification commands and project conventions.
+The root package is `tafrigh-cli`, with its source in `src/`. The `tafrigh`, `tafrigh-wit`, `tafrigh-youtube` and `tafrigh-cohere` libraries live under `crates/`. All five packages are workspace members and are selected by default when running Cargo from the root. Cohere builds require CMake and a C++ compiler; tests use a real model only when `TAFRIGH_TEST_COHERE_MODEL=/path/to/model.gguf` is set. See [AGENTS.md](../AGENTS.md) for verification commands and project conventions.
 
 After changing the CLI, regenerate `docs/cli.md` and `docs/tafrigh.1` from the repository root:
 
