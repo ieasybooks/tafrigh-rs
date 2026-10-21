@@ -168,12 +168,26 @@ let segments = transcriber.transcribe("lecture.mp3".as_ref(), &NoProgress).await
 
 To process files, folders and URLs into transcript files, use `tafrigh::Tafrigh::builder`. The library retains flat output by default; use `.output_mode(tafrigh::output::OutputMode::TreeToTree)` or `SideBySide` to choose another layout, and `.recursive(true)` to include subdirectories.
 
-For captions, use `tafrigh::Tafrigh::youtube("ar")` instead of `builder(transcriber)`, then configure the same output writer and yt-dlp options. Its `run` method accepts YouTube URLs and reports per-item failures through the same `RunReport`.
+For captions, construct `tafrigh_youtube::YoutubeCaptions` and pass it to `Tafrigh::captions`, then configure the same output writer and yt-dlp options. Its `run` method accepts YouTube URLs and reports per-item failures through the same `RunReport`.
+
+```rust
+use tafrigh::source::Input;
+use tafrigh::{NoProgress, Tafrigh};
+use tafrigh_youtube::YoutubeCaptions;
+
+let pipeline = Tafrigh::captions(YoutubeCaptions::new("ar")?).build();
+let report = pipeline
+    .run([Input::parse("https://youtu.be/VIDEO_ID")], &NoProgress)
+    .await?;
+```
+
+YouTube validation, track selection, JSON3 parsing and word timings live in `tafrigh-youtube`. It implements the core `CaptionProvider` interface for URL resolution and fetching timed text. Core handles output layouts, progress and item failures, and supplies the configured yt-dlp client. Library users who only need captions can disable `tafrigh`'s default features; `tafrigh-youtube` does not enable Silero.
 
 | Crate | What it is |
 |---|---|
 | [`tafrigh`](https://crates.io/crates/tafrigh) | the core: decoding, Silero VAD, chunking, output formats |
 | [`tafrigh-wit`](https://crates.io/crates/tafrigh-wit) | the Wit.ai recognizer |
+| [`tafrigh-youtube`](../crates/tafrigh-youtube) | existing YouTube captions through yt-dlp |
 | [`tafrigh-cli`](https://crates.io/crates/tafrigh-cli) | the `tafrigh` command |
 
 ## Differences from the Python version
@@ -189,7 +203,7 @@ The Rust version is pinned in `rust-toolchain.toml`. Run `mise install` from the
 
 ffmpeg tracks the latest stable release, while yt-dlp tracks the latest [official nightly build](https://github.com/yt-dlp/yt-dlp#update-channels), including prereleases, through a mise backend alias. Run `mise upgrade ffmpeg yt-dlp` to update installed copies; the other tools keep their configured version requirements. CI installs the same media tools through mise.
 
-The root package is `tafrigh-cli`, with its source in `src/`. The `tafrigh` and `tafrigh-wit` libraries live under `crates/`. All three packages are workspace members and are selected by default when running Cargo from the root. See [AGENTS.md](../AGENTS.md) for verification commands and project conventions.
+The root package is `tafrigh-cli`, with its source in `src/`. The `tafrigh`, `tafrigh-wit` and `tafrigh-youtube` libraries live under `crates/`. All four packages are workspace members and are selected by default when running Cargo from the root. See [AGENTS.md](../AGENTS.md) for verification commands and project conventions.
 
 After changing the CLI, regenerate `docs/cli.md` and `docs/tafrigh.1` from the repository root:
 

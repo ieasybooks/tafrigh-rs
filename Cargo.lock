@@ -2027,6 +2027,7 @@ dependencies = [
  "shell-words",
  "tafrigh",
  "tafrigh-wit",
+ "tafrigh-youtube",
  "tempfile",
  "tokio",
  "tracing",
@@ -2051,6 +2052,18 @@ dependencies = [
  "tokio",
  "tracing",
  "wiremock",
+]
+
+[[package]]
+name = "tafrigh-youtube"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tafrigh",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

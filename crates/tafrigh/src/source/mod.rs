@@ -1,6 +1,5 @@
 //! Resolving user inputs into media items.
 
-mod captions;
 mod local;
 mod ytdlp;
 
@@ -10,7 +9,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-pub use captions::{is_subtitle_language, is_youtube_url};
 pub(crate) use local::discover_local;
 pub use local::{MEDIA_EXTENSIONS, expand_local, is_media_path};
 pub use ytdlp::YtDlp;
@@ -82,18 +80,18 @@ pub struct MediaItem {
     pub id: Arc<str>,
     /// Human-readable name, e.g. a video title or file name.
     pub title: Option<Arc<str>>,
-    /// Where the audio comes from.
+    /// Where the media or existing captions come from.
     pub media: Media,
     /// A link to the original, used in samples (e.g. a video page).
     pub link: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// Where an item's audio comes from.
+/// Where an item's media or existing captions come from.
 pub enum Media {
     /// A local file.
     File(PathBuf),
-    /// Downloaded on demand through yt-dlp.
+    /// A remote item, downloaded or used to retrieve existing captions on demand.
     Remote {
         /// Page or media URL passed to yt-dlp.
         url: String,

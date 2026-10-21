@@ -111,7 +111,8 @@ impl fmt::Display for ErrorChain<'_> {
 }
 
 impl Error {
-    pub(crate) fn io(context: impl Into<String>, source: std::io::Error) -> Self {
+    /// Adds context to an I/O error from the pipeline or a backend.
+    pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
         Self::Io {
             context: context.into(),
             source,

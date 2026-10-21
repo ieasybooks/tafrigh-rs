@@ -14,7 +14,7 @@ use crate::output::{
     Layout, OutputMode, OutputWriter, SampleReservoir, SampleRow, Target, unique_name, write_sample,
 };
 use crate::source::{Input, Media, MediaItem, YtDlp, discover_local};
-use crate::{Error, ErrorChain, Result, Segment, Transcriber};
+use crate::{CaptionProvider, Error, ErrorChain, Result, Segment, Transcriber};
 
 /// Transcribes inputs (files, folders, URLs) and writes transcripts.
 ///
@@ -72,7 +72,7 @@ pub struct TafrighBuilder {
 /// A run has exactly one backend. Caption runs never construct or invoke an audio transcriber.
 enum Backend {
     Media(Arc<dyn Transcriber>),
-    Youtube { language: String },
+    Captions(Arc<dyn CaptionProvider>),
 }
 
 struct PrefetchedDownload(Option<tokio::task::JoinHandle<Result<PathBuf>>>);
@@ -232,13 +232,10 @@ impl Tafrigh {
         Self::with_backend(Backend::Media(Arc::new(transcriber)))
     }
 
-    /// Configures a run that retrieves existing [YouTube](https://www.youtube.com) captions in one language.
-    /// Manual captions take precedence over original automatic captions. Missing captions
-    /// fail the item; there is no speech recognition or translation fallback.
-    pub fn youtube(language: impl Into<String>) -> TafrighBuilder {
-        Self::with_backend(Backend::Youtube {
-            language: language.into(),
-        })
+    /// Configures a run that retrieves existing captions from URLs through `provider`.
+    /// Caption runs share output handling with media transcription and never download audio.
+    pub fn captions(provider: impl CaptionProvider + 'static) -> TafrighBuilder {
+        Self::with_backend(Backend::Captions(Arc::new(provider)))
     }
 
     fn with_backend(backend: Backend) -> TafrighBuilder {
@@ -255,18 +252,11 @@ impl Tafrigh {
 
     /// Resolves the media items behind an input.
     pub async fn resolve(&self, input: &Input) -> Result<Vec<MediaItem>> {
-        if let Backend::Youtube { language } = &self.backend {
-            if !crate::source::is_subtitle_language(language) {
-                return Err(Error::Source(
-                    "expected one subtitle language code, such as ar or en-US".into(),
-                ));
-            }
+        if let Backend::Captions(provider) = &self.backend {
             let Input::Url(url) = input else {
-                return Err(Error::Source(
-                    "the youtube transcriber requires YouTube URLs".into(),
-                ));
+                return Err(Error::Source("caption providers require URL inputs".into()));
             };
-            return self.ytdlp.resolve_youtube(url).await;
+            return provider.resolve(url, &self.ytdlp).await;
         }
         match input {
             Input::Path(path) => {
@@ -401,7 +391,7 @@ impl Tafrigh {
             });
             let total = items.len();
             for (position, item) in items.into_iter().enumerate() {
-                let directory = if matches!(self.backend, Backend::Youtube { .. })
+                let directory = if matches!(self.backend, Backend::Captions(_))
                     && self.output_mode == OutputMode::SideBySide
                 {
                     Some(self.ytdlp.download_dir().to_owned())
@@ -540,7 +530,7 @@ impl Tafrigh {
     }
 
     fn prefetch_download(&self, next: &Queued) -> Option<PrefetchedDownload> {
-        if matches!(self.backend, Backend::Youtube { .. })
+        if matches!(self.backend, Backend::Captions(_))
             || next.planning_error.is_some()
             || !matches!(next.item.media, Media::Remote { .. })
             || (self.skip_existing && next.output.as_ref().is_some_and(Target::exists))
@@ -565,9 +555,9 @@ impl Tafrigh {
         sent: &Notify,
     ) -> Result<(Option<PathBuf>, Vec<Segment>)> {
         let transcriber = match &self.backend {
-            Backend::Youtube { language } => {
+            Backend::Captions(provider) => {
                 events.report(Event::FetchingCaptions { item: info.clone() });
-                let segments = self.ytdlp.captions(item, language).await?;
+                let segments = provider.fetch(item, &self.ytdlp).await?;
                 return Ok((None, segments));
             }
             Backend::Media(transcriber) => transcriber,

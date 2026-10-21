@@ -23,7 +23,6 @@ futures.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "process", "fs"] }
 tracing.workspace = true
@@ -31,6 +30,7 @@ tract-onnx = { workspace = true, optional = true }
 
 [dev-dependencies]
 base64.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 
 [lints]

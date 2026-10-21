@@ -54,7 +54,7 @@ jobs:
     env:
       # The first release of a new crate needs an API token: crates.io only allows trusted
       # publishing for crates that already exist. Remove the secret once trusted publishing is
-      # set up for all three crates.
+      # set up for all crates.
       HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v7
@@ -71,7 +71,7 @@ jobs:
             | jq -r '.packages[] | select(.name == "tafrigh-cli") | .version')
           # Dependencies first. Versions already on crates.io are skipped, so a failed run can be
           # rerun.
-          for crate in tafrigh tafrigh-wit tafrigh-cli; do
+          for crate in tafrigh tafrigh-wit tafrigh-youtube tafrigh-cli; do
             status=$(curl -s -o /dev/null -w '%{http_code}' -A "tafrigh-rs release ($GITHUB_REPOSITORY)" \
               "https://crates.io/api/v1/crates/$crate/$version")
             if [ "$status" = 200 ]; then

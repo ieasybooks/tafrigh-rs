@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{Error, Result, Segment, Word};
+use tafrigh::{Error, Result, Segment, Word};
 
 /// Whether `url` is an HTTP(S) [YouTube](https://www.youtube.com) URL, including short links and subdomains.
 pub fn is_youtube_url(url: &str) -> bool {
