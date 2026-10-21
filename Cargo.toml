@@ -19,6 +19,7 @@ doc = false
 [dependencies]
 tafrigh = { path = "crates/tafrigh", version = "0.1.0" }
 tafrigh-wit = { path = "crates/tafrigh-wit", version = "0.1.0" }
+tafrigh-youtube = { path = "crates/tafrigh-youtube", version = "0.1.0" }
 anyhow.workspace = true
 indicatif.workspace = true
 shell-words.workspace = true
@@ -37,8 +38,8 @@ workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/tafrigh", "crates/tafrigh-wit"]
-default-members = [".", "crates/tafrigh", "crates/tafrigh-wit"]
+members = ["crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube"]
+default-members = [".", "crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube"]
 
 [workspace.package]
 edition = "2024"

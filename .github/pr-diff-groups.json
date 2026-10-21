@@ -24,7 +24,8 @@
     "children": [
       { "name": "CLI", "match": ["src/**"] },
       { "name": "Core", "match": ["crates/tafrigh/src/**", "crates/tafrigh/assets/**"] },
-      { "name": "Wit", "match": ["crates/tafrigh-wit/src/**"] }
+      { "name": "Wit", "match": ["crates/tafrigh-wit/src/**"] },
+      { "name": "YouTube", "match": ["crates/tafrigh-youtube/src/**"] }
     ]
   },
   {

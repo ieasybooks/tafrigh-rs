@@ -34,7 +34,7 @@ Tests require `ffmpeg` on PATH. Wit tests use local mock servers and need no rea
 
 ## Project conventions
 
-- The root package is `tafrigh-cli`, producing the `tafrigh` binary. Core logic lives in `crates/tafrigh`; Wit integration lives in `crates/tafrigh-wit`.
+- The root package is `tafrigh-cli`, producing the `tafrigh` binary. Core logic lives in `crates/tafrigh`; Wit integration lives in `crates/tafrigh-wit`, and YouTube captions live in `crates/tafrigh-youtube`.
 - Reuse workspace dependencies and lint settings from `Cargo.toml`.
 - CLI declarations live in `src/cli.rs`. After CLI changes, regenerate `docs/cli.md` and `docs/tafrigh.1` with `sh scripts/cli-docs.sh` and include the generated changes. Install the pinned generator with `mise install usage`.
 - Silero golden fixtures come from `crates/tafrigh/tests/fixtures/generate.py`. Regenerate them when changing the reference model, reference version, or test cases.

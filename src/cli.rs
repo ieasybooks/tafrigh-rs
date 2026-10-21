@@ -448,14 +448,14 @@ fn validate(cli: &Cli) -> Result<(), ValidationError> {
             ValidationError::field("--subtitle-language")
                 .reason("is required with --transcriber youtube")
         })?;
-        if !tafrigh::source::is_subtitle_language(language) {
+        if !tafrigh_youtube::is_subtitle_language(language) {
             return Err(ValidationError::field("--subtitle-language")
                 .reason("expected one language code, such as ar or en-US; patterns and lists are not supported"));
         }
         if args
             .inputs
             .iter()
-            .any(|input| !tafrigh::source::is_youtube_url(input))
+            .any(|input| !tafrigh_youtube::is_youtube_url(input))
         {
             return Err(ValidationError::field("INPUT")
                 .reason("--transcriber youtube requires YouTube URLs"));

@@ -1,4 +1,4 @@
-//! Turning media files into segments.
+//! Producing timed text from media files or existing captions.
 
 mod chunked;
 
@@ -10,6 +10,7 @@ pub use chunked::{ChunkOptions, ChunkedTranscriber, OnChunkError};
 
 use crate::audio::AudioChunk;
 use crate::event::{Progress, TranscribeEvent};
+use crate::source::{MediaItem, YtDlp};
 use crate::{BoxError, Result, Segment, Word};
 
 /// Anything that turns a media file into timed text.
@@ -24,6 +25,20 @@ pub trait Transcriber: Send + Sync {
         media: &Path,
         progress: &dyn Progress<TranscribeEvent>,
     ) -> Result<Vec<Segment>>;
+}
+
+/// Retrieves existing captions from URLs without downloading or recognizing audio.
+///
+/// Providers own URL validation, track selection and caption parsing. The pipeline supplies
+/// its configured yt-dlp client so executable, arguments and metadata settings stay shared.
+#[async_trait]
+pub trait CaptionProvider: Send + Sync {
+    /// Resolves a URL into remote items, in their intended processing order.
+    async fn resolve(&self, url: &str, ytdlp: &YtDlp) -> Result<Vec<MediaItem>>;
+
+    /// Fetches an item's captions as segments in time order.
+    /// Missing captions fail the item; providers must not fall back to audio recognition.
+    async fn fetch(&self, item: &MediaItem, ytdlp: &YtDlp) -> Result<Vec<Segment>>;
 }
 
 /// Recognizes one chunk of audio at a time, e.g. a cloud speech API.
@@ -94,6 +109,17 @@ impl<T: Transcriber + ?Sized> Transcriber for std::sync::Arc<T> {
         progress: &dyn Progress<TranscribeEvent>,
     ) -> Result<Vec<Segment>> {
         (**self).transcribe(media, progress).await
+    }
+}
+
+#[async_trait]
+impl<T: CaptionProvider + ?Sized> CaptionProvider for std::sync::Arc<T> {
+    async fn resolve(&self, url: &str, ytdlp: &YtDlp) -> Result<Vec<MediaItem>> {
+        (**self).resolve(url, ytdlp).await
+    }
+
+    async fn fetch(&self, item: &MediaItem, ytdlp: &YtDlp) -> Result<Vec<Segment>> {
+        (**self).fetch(item, ytdlp).await
     }
 }
 

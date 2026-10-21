@@ -14,6 +14,7 @@ use tafrigh::output::OutputMode;
 use tafrigh::source::Input;
 use tafrigh::{ChunkedTranscriber, Event, Tafrigh};
 use tafrigh_wit::WitRecognizer;
+use tafrigh_youtube::YoutubeCaptions;
 use tracing_subscriber::EnvFilter;
 
 use crate::cli::{Args, Command};
@@ -109,11 +110,11 @@ async fn run(args: Args, output_mode: OutputMode, ui: &Ui) -> anyhow::Result<Exi
         }
         cli::Transcriber::Youtube => {
             setup::check_tools(None, Some(&ytdlp)).await?;
-            Tafrigh::youtube(
+            Tafrigh::captions(YoutubeCaptions::new(
                 args.subtitle_language
                     .as_deref()
                     .expect("validated subtitle language"),
-            )
+            )?)
         }
     };
 
@@ -139,9 +140,9 @@ async fn run(args: Args, output_mode: OutputMode, ui: &Ui) -> anyhow::Result<Exi
 
 fn init_logging(verbose: u8, ui: &Ui) {
     let default = match verbose {
-        0 => "warn,tafrigh=info,tafrigh_wit=info,tafrigh_cli=info",
-        1 => "warn,tafrigh=debug,tafrigh_wit=debug,tafrigh_cli=debug",
-        _ => "info,tafrigh=trace,tafrigh_wit=trace,tafrigh_cli=trace",
+        0 => "warn,tafrigh=info,tafrigh_wit=info,tafrigh_youtube=info,tafrigh_cli=info",
+        1 => "warn,tafrigh=debug,tafrigh_wit=debug,tafrigh_youtube=debug,tafrigh_cli=debug",
+        _ => "info,tafrigh=trace,tafrigh_wit=trace,tafrigh_youtube=trace,tafrigh_cli=trace",
     };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
     tracing_subscriber::fmt()
