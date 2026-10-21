@@ -16,8 +16,11 @@ cuda = ["transcribe-cpp/cuda"]
 [dependencies]
 tafrigh = { path = "../tafrigh", version = "0.3.0" }
 async-trait.workspace = true
+dirs = "7.0.0"
+reqwest.workspace = true
+sha2 = "0.11.1"
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync", "time"] }
 tracing.workspace = true
 transcribe-cpp = "0.4.0"
 
@@ -26,6 +29,7 @@ anyhow.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tracing-subscriber.workspace = true
+wiremock.workspace = true
 
 [lints]
 workspace = true

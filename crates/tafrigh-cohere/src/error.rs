@@ -21,4 +21,29 @@ pub enum CohereError {
     /// The inference worker stopped before returning a result.
     #[error("the Cohere inference worker stopped before returning a result")]
     WorkerStopped,
+    /// Network, HTTP status or response-stream failure while downloading a model.
+    #[error("Cohere model download failed: {0}")]
+    Download(#[from] reqwest::Error),
+    /// The download did not match the pinned file length.
+    #[error("Cohere model {filename} has {actual} downloaded bytes; expected {expected}")]
+    DownloadSize {
+        /// Model filename.
+        filename: String,
+        /// Pinned expected byte count.
+        expected: u64,
+        /// Received byte count.
+        actual: u64,
+    },
+    /// The download's SHA-256 did not match the pinned digest.
+    #[error(
+        "Cohere model {filename} failed SHA-256 verification: expected {expected}, got {actual}"
+    )]
+    DownloadHash {
+        /// Model filename.
+        filename: String,
+        /// Pinned digest.
+        expected: String,
+        /// Downloaded file digest.
+        actual: String,
+    },
 }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use crate::CohereError;
+use crate::{CohereError, ModelSource};
 
 /// The model's two supported language hints.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -95,8 +95,10 @@ impl FromStr for Device {
 /// Settings for [`crate::CohereRecognizer`].
 #[derive(Debug, Clone)]
 pub struct CohereConfig {
-    /// Path to a local Cohere GGUF model.
-    pub model: PathBuf,
+    /// A model variant (`Q8_0` by default) or a local GGUF file.
+    pub model: ModelSource,
+    /// Override the platform's `tafrigh/models` cache directory.
+    pub model_dir: Option<PathBuf>,
     /// Language hint; Arabic by default.
     pub language: Language,
     /// Compute device; GPU when available, otherwise CPU by default.
@@ -111,16 +113,26 @@ pub struct CohereConfig {
     pub threads: usize,
 }
 
-impl CohereConfig {
-    /// A local model with Arabic decoding and automatic device selection.
-    pub fn new(model: impl Into<PathBuf>) -> Self {
+impl Default for CohereConfig {
+    fn default() -> Self {
         Self {
-            model: model.into(),
+            model: ModelSource::default(),
+            model_dir: None,
             language: Language::default(),
             device: Device::default(),
             batch_size: 8,
             batch_wait: Duration::from_millis(10),
             threads: 0,
+        }
+    }
+}
+
+impl CohereConfig {
+    /// A variant name or local model with Arabic decoding and automatic device selection.
+    pub fn new(model: impl Into<ModelSource>) -> Self {
+        Self {
+            model: model.into(),
+            ..Self::default()
         }
     }
 
@@ -140,10 +152,8 @@ impl CohereConfig {
                 "batch_wait must not exceed one second".into(),
             ));
         }
-        if self
-            .model
-            .extension()
-            .is_none_or(|extension| extension != "gguf")
+        if let ModelSource::Local(path) = &self.model
+            && path.extension().is_none_or(|extension| extension != "gguf")
         {
             return Err(CohereError::Config(
                 "the local model must be a .gguf file".into(),

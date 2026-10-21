@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::{Arc, Once, OnceLock};
 use std::time::Duration;
 
@@ -9,7 +10,7 @@ use transcribe_cpp::{
     Backend, DeviceType, Model, ModelOptions, RunOptions, Session, SessionOptions,
 };
 
-use crate::{CohereConfig, CohereError, Device};
+use crate::{CohereConfig, CohereError, Device, DownloadProgress};
 
 /// One sample at 16 kHz, in nanoseconds.
 const SAMPLE_NANOS: u64 = 1_000_000_000 / SAMPLE_RATE as u64;
@@ -44,14 +45,28 @@ struct Request {
 }
 
 impl CohereRecognizer {
-    /// Loads the local GGUF and opens a session on a blocking thread.
+    /// Resolves the model, downloading a variant if needed, and opens a session on a blocking thread.
     ///
     /// Requires a Tokio runtime. `auto` tries a GPU and retries loading on CPU if necessary;
     /// `gpu` and `gpu:N` fail if the requested GPU is unavailable or cannot load the model.
     pub async fn load(config: CohereConfig) -> Result<Self, CohereError> {
+        Self::load_with_progress(config, |_| {}).await
+    }
+
+    /// Like [`Self::load`], reporting download byte counts to a callback.
+    ///
+    /// Local files and already cached variants do not invoke the callback.
+    pub async fn load_with_progress(
+        config: CohereConfig,
+        progress: impl Fn(DownloadProgress) + Send + Sync,
+    ) -> Result<Self, CohereError> {
         config.validate()?;
+        let path = config
+            .model
+            .resolve(config.model_dir.as_deref(), &progress)
+            .await?;
         let settings = config.clone();
-        let session = tokio::task::spawn_blocking(move || load_session(&settings)).await??;
+        let session = tokio::task::spawn_blocking(move || load_session(&settings, &path)).await??;
         let model = session.model();
         let backend = model.backend();
         let device_name = model.device()?.description;
@@ -123,9 +138,9 @@ fn is_gpu(device: &transcribe_cpp::Device) -> bool {
     matches!(device.device_type, DeviceType::Gpu | DeviceType::Igpu)
 }
 
-fn load_session(config: &CohereConfig) -> Result<Session, CohereError> {
+fn load_session(config: &CohereConfig, path: &Path) -> Result<Session, CohereError> {
     // Validate the file before initializing native backends or allocating weights.
-    if !std::fs::metadata(&config.model)?.is_file() {
+    if !std::fs::metadata(path)?.is_file() {
         return Err(CohereError::Config(
             "the model path is not a regular file".into(),
         ));
@@ -160,6 +175,7 @@ fn load_session(config: &CohereConfig) -> Result<Session, CohereError> {
     if let Some(gpu) = gpu {
         match open_session(
             config,
+            path,
             &ModelOptions {
                 backend: Backend::Auto,
                 device: Some(gpu),
@@ -174,6 +190,7 @@ fn load_session(config: &CohereConfig) -> Result<Session, CohereError> {
     }
     open_session(
         config,
+        path,
         &ModelOptions {
             backend: Backend::Cpu,
             device: None,
@@ -181,8 +198,12 @@ fn load_session(config: &CohereConfig) -> Result<Session, CohereError> {
     )
 }
 
-fn open_session(config: &CohereConfig, options: &ModelOptions) -> Result<Session, CohereError> {
-    let model = Model::load_with(&config.model, options)?;
+fn open_session(
+    config: &CohereConfig,
+    path: &Path,
+    options: &ModelOptions,
+) -> Result<Session, CohereError> {
+    let model = Model::load_with(path, options)?;
     if model.arch() != "cohere_asr" {
         return Err(CohereError::Config(format!(
             "expected a Cohere GGUF model, found architecture {:?}",

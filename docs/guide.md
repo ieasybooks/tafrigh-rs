@@ -171,14 +171,14 @@ To process files, folders and URLs into transcript files, use `tafrigh::Tafrigh:
 
 Custom chunk recognizers declare whether their results carry word timings through `ChunkRecognizer::word_timings()` (true by default). For a recognizer without word timings, set `ChunkOptions::resend_gaps` to `None`; `ChunkedTranscriber::new` rejects gap resends because it cannot distinguish recognized speech from missed speech without word timings. Untimed text becomes one segment covering its chunk.
 
-The `tafrigh-cohere` library recognizes Arabic (`ar`, the default) or English (`en`) locally with Cohere Transcribe Arabic 07-2026. Load a local `.gguf` file and pair it with the same core pipeline:
+The `tafrigh-cohere` library recognizes Arabic (`ar`, the default) or English (`en`) locally with Cohere Transcribe Arabic 07-2026. Select a variant or load a local `.gguf` file and pair it with the same core pipeline:
 
 ```rust
 use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
 use tafrigh::{ChunkOptions, ChunkedTranscriber, NoProgress, Transcriber};
 use tafrigh_cohere::{CohereConfig, CohereRecognizer};
 
-let recognizer = CohereRecognizer::load(CohereConfig::new("model.gguf")).await?;
+let recognizer = CohereRecognizer::load(CohereConfig::new("q8_0")).await?;
 let segmenter = SileroSegmenter::new(SileroConfig::default())?;
 let options = ChunkOptions { resend_gaps: None, ..ChunkOptions::default() };
 let transcriber = ChunkedTranscriber::new(segmenter, recognizer, options)?;
@@ -190,6 +190,12 @@ Cohere returns punctuated text with one segment per chunk and no word timings. A
 CUDA builds need the NVIDIA CUDA toolkit and its runtime libraries. CMake locates them through its normal toolkit search, including `CUDAToolkit_ROOT` or `CUDA_PATH` for a nonstandard installation. The crate supplies the CUDA runtime, cuBLAS and driver link dependencies omitted by transcribe-cpp-sys 0.4.0's static-library manifest. Cross-compilation and custom static CUDA-runtime configurations are not validated.
 
 Concurrent Cohere calls share one session and collect into batches up to `CohereConfig::batch_size` (8 by default); a partial batch flushes after `batch_wait` (10 ms). CPU runs one request at a time. A larger GPU batch needs more memory and can change numerical results. When the model repeats itself or reaches its token limit, the chunk keeps the text produced until then (transcribe.cpp drops the repeats) and a warning is logged. The small `cargo run -p tafrigh-cohere --release --example transcribe -- MODEL.gguf OUTPUT_DIR INPUT...` example writes text for files and folders using Silero and the core pipeline; add `--device gpu`, `--batch-size 8`, `--threads 4`, or `--chunk-seconds 30 --merge` to compare settings.
+
+Model names are `bf16`, `f16`, `q8_0` (the default), `q6_k`, `q5_k_m` and `q4_k_m`. `CohereConfig::default()` selects Q8_0; `CohereConfig::new("/path/to/model.gguf")` uses an existing file directly. Downloaded variants come from the ungated `handy-computer/cohere-transcribe-arabic-07-2026-gguf` repository at the immutable `MODEL_REVISION`, with each file's SHA-256 and size pinned in code. Weights are Apache-2.0 and are not bundled in binaries.
+
+The default model directory is `$XDG_CACHE_HOME/tafrigh/models` on Linux (falling back to `~/.cache/tafrigh/models`) or `~/Library/Caches/tafrigh/models` on macOS. Set `config.model_dir = Some(path)` to override it; there is no tafrigh-specific cache environment variable. Files live under `cohere-transcribe-arabic-07-2026/`. Downloads stream to `<file>.part`, verify size and SHA-256, then rename into place. A per-file lock coordinates concurrent processes. Failed downloads remove the partial file; a partial file left by process cancellation is restarted on the next attempt. An existing final file with the right size skips downloading and rehashing. Remove that file to force a fresh verified download if it was modified.
+
+`CohereRecognizer::load_with_progress(config, |progress| { /* progress.downloaded, progress.total */ }).await?` reports downloaded bytes for a CLI or application progress bar. `ModelSource::resolve` can also download weights without loading the model. Callbacks should return promptly and are not invoked for local or already cached files.
 
 For captions, construct `tafrigh_youtube::YoutubeCaptions` and pass it to `Tafrigh::captions`, then configure the same output writer and yt-dlp options. Its `run` method accepts YouTube URLs and reports per-item failures through the same `RunReport`.
 

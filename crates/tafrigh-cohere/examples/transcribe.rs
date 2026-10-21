@@ -7,7 +7,7 @@ use tafrigh::output::{BuiltinFormat, OutputMode, OutputWriter};
 use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
 use tafrigh::source::Input;
 use tafrigh::{ChunkOptions, ChunkedTranscriber, ItemStatus, NoProgress, Tafrigh};
-use tafrigh_cohere::{CohereConfig, CohereRecognizer};
+use tafrigh_cohere::{CohereConfig, CohereRecognizer, ModelSource};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -18,9 +18,13 @@ async fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let model = args
         .next()
-        .context("usage: transcribe MODEL.gguf OUTPUT_DIR [OPTIONS] INPUT...")?;
+        .context("usage: transcribe MODEL OUTPUT_DIR [OPTIONS] INPUT...")?;
     let output = args.next().context("missing output directory")?;
-    let mut config = CohereConfig::new(PathBuf::from(model));
+    let model = model.to_str().map_or_else(
+        || ModelSource::Local(PathBuf::from(&model)),
+        ModelSource::from,
+    );
+    let mut config = CohereConfig::new(model);
     let mut options = ChunkOptions {
         resend_gaps: None,
         ..ChunkOptions::default()
