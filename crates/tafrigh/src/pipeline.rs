@@ -9,6 +9,7 @@ use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use tokio::sync::Notify;
 
+use crate::error::task_result;
 use crate::event::{Event, ItemInfo, Progress, TranscribeEvent};
 use crate::output::{
     Layout, OutputMode, OutputWriter, SampleReservoir, SampleRow, Target, unique_name, write_sample,
@@ -35,6 +36,7 @@ use crate::{CaptionProvider, Error, ErrorChain, Result, Segment, Transcriber};
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct Tafrigh {
     backend: Backend,
     output: OutputWriter,
@@ -45,20 +47,8 @@ pub struct Tafrigh {
     sample: usize,
 }
 
-impl std::fmt::Debug for Tafrigh {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Tafrigh")
-            .field("output", &self.output)
-            .field("output_mode", &self.output_mode)
-            .field("ytdlp", &self.ytdlp)
-            .field("recursive", &self.recursive)
-            .field("skip_existing", &self.skip_existing)
-            .field("sample", &self.sample)
-            .finish_non_exhaustive()
-    }
-}
-
 /// Configures a [`Tafrigh`] run; created by [`Tafrigh::builder`].
+#[derive(Debug)]
 pub struct TafrighBuilder {
     backend: Backend,
     output: OutputWriter,
@@ -75,40 +65,28 @@ enum Backend {
     Captions(Arc<dyn CaptionProvider>),
 }
 
-struct PrefetchedDownload(Option<tokio::task::JoinHandle<Result<PathBuf>>>);
+impl std::fmt::Debug for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Media(_) => "Media",
+            Self::Captions(_) => "Captions",
+        })
+    }
+}
+
+/// A download started ahead of its item. Dropping it cancels the download.
+struct PrefetchedDownload(tokio::task::JoinHandle<Result<PathBuf>>);
 
 impl PrefetchedDownload {
     async fn wait(mut self) -> Result<PathBuf> {
-        let task = self
-            .0
-            .as_mut()
-            .expect("prefetched download is awaited once");
-        match task.await {
-            Ok(result) => result,
-            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-            Err(_) => Err(Error::Cancelled),
-        }
+        task_result((&mut self.0).await)
     }
 }
 
 impl Drop for PrefetchedDownload {
     fn drop(&mut self) {
-        if let Some(task) = self.0.take() {
-            task.abort();
-        }
-    }
-}
-
-impl std::fmt::Debug for TafrighBuilder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TafrighBuilder")
-            .field("output", &self.output)
-            .field("output_mode", &self.output_mode)
-            .field("ytdlp", &self.ytdlp)
-            .field("recursive", &self.recursive)
-            .field("skip_existing", &self.skip_existing)
-            .field("sample", &self.sample)
-            .finish_non_exhaustive()
+        // Does nothing once the download has finished.
+        self.0.abort();
     }
 }
 
@@ -264,11 +242,12 @@ impl Tafrigh {
                 let recursive = self.recursive;
                 let excluded = (self.output_mode != OutputMode::SideBySide)
                     .then(|| self.output.dir().to_owned());
-                tokio::task::spawn_blocking(move || {
-                    discover_local(&path, recursive, excluded.as_deref())
-                })
-                .await
-                .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))
+                task_result(
+                    tokio::task::spawn_blocking(move || {
+                        discover_local(&path, recursive, excluded.as_deref())
+                    })
+                    .await,
+                )
             }
             Input::Url(url) => self.ytdlp.resolve(url).await,
         }
@@ -539,9 +518,9 @@ impl Tafrigh {
         }
         let ytdlp = self.ytdlp.clone();
         let item = next.item.clone();
-        Some(PrefetchedDownload(Some(tokio::spawn(async move {
+        Some(PrefetchedDownload(tokio::spawn(async move {
             ytdlp.download(&item).await
-        }))))
+        })))
     }
 
     /// Downloads if needed and transcribes one item; `sent` fires once all its audio has

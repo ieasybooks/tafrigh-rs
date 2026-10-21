@@ -10,6 +10,7 @@ use super::{ChunkRecognizer, Recognition, Transcriber};
 use crate::audio::{
     AudioChunk, Decoder, Padding, SAMPLE_RATE, samples_to_seconds, seconds_to_samples,
 };
+use crate::error::task_result;
 use crate::event::{Progress, TranscribeEvent};
 use crate::segment::{Merger, Segmenter, SpeechSpan};
 use crate::{Error, ErrorChain, Result, Segment, Word};
@@ -216,9 +217,11 @@ impl Transcriber for ChunkedTranscriber {
             decoder: self.decoder.clone(),
             path: media.to_owned(),
             segmenter: self.segmenter.clone(),
-            max_len: seconds_to_samples(self.options.max_chunk_s),
-            merge: self.options.merge,
-            padding: self.options.padding,
+            chunker: Chunker::new(
+                seconds_to_samples(self.options.max_chunk_s),
+                self.options.merge,
+                self.options.padding,
+            ),
             tx,
         };
         let producer_task = tokio::task::spawn_blocking(move || producer.run());
@@ -293,11 +296,7 @@ impl Transcriber for ChunkedTranscriber {
         drop(rx);
         drop(inflight);
 
-        let decoding = match producer_task.await {
-            Ok(result) => result,
-            Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
-            Err(_) => Err(Error::Cancelled),
-        };
+        let decoding = task_result(producer_task.await);
         outcome?;
         decoding?;
 
@@ -547,13 +546,161 @@ struct Producer {
     decoder: Decoder,
     path: PathBuf,
     segmenter: Arc<dyn Segmenter>,
-    max_len: usize,
-    merge: bool,
-    padding: Option<Padding>,
+    chunker: Chunker,
     tx: mpsc::Sender<Produced>,
 }
 
+const BLOCK_SAMPLES: usize = SAMPLE_RATE as usize; // one second
+
+impl Producer {
+    fn run(mut self) -> Result<()> {
+        let duration = self.decoder.probe_duration(&self.path);
+        self.send(Produced::Started(duration))?;
+
+        let mut session = self.segmenter.begin()?;
+        let mut reader = self.decoder.open(&self.path)?;
+        let mut block = Vec::with_capacity(BLOCK_SAMPLES);
+        let mut floats = Vec::with_capacity(BLOCK_SAMPLES);
+        let mut spans = Vec::new();
+        let mut decoded = 0;
+        while reader.read(&mut block, BLOCK_SAMPLES)? > 0 {
+            decoded += block.len();
+            self.chunker.add_audio(&block);
+            floats.clear();
+            floats.extend(block.iter().map(|&s| f32::from(s) / 32768.0));
+            session.push(&floats, &mut spans)?;
+            self.send_chunks(&mut spans)?;
+            self.send(Produced::Decoded(samples_to_seconds(decoded)))?;
+            self.chunker.discard_before(session.retain_from());
+        }
+
+        session.finish(&mut spans)?;
+        self.send_chunks(&mut spans)?;
+        if let Some(request) = self.chunker.finish() {
+            self.send(Produced::Chunk(Box::new(request)))?;
+        }
+        self.send(Produced::Segmented(self.chunker.chunks))
+    }
+
+    fn send_chunks(&mut self, spans: &mut Vec<SpeechSpan>) -> Result<()> {
+        let tx = &self.tx;
+        self.chunker.cut(spans.drain(..), |request| {
+            send(tx, Produced::Chunk(Box::new(request)))
+        })
+    }
+
+    fn send(&self, message: Produced) -> Result<()> {
+        send(&self.tx, message)
+    }
+}
+
+/// Waits for room in the channel, so only a few chunks' audio is ever waiting.
+fn send(tx: &mpsc::Sender<Produced>, message: Produced) -> Result<()> {
+    tx.blocking_send(message).map_err(|_| Error::Cancelled)
+}
+
+/// Cuts speech spans into padded requests, merging consecutive spans when configured, and
+/// keeps the decoded audio that requests still to come need.
+struct Chunker {
+    max_len: usize,
+    padding: Option<Padding>,
+    merger: Option<Merger>,
+    /// Speech spans inside the chunk the merger is still growing.
+    parts: Vec<SpeechSpan>,
+    pcm: PcmWindow,
+    /// Chunks cut so far.
+    chunks: usize,
+}
+
+impl Chunker {
+    fn new(max_len: usize, merge: bool, padding: Option<Padding>) -> Self {
+        Self {
+            max_len,
+            padding,
+            merger: merge.then(|| Merger::new(max_len)),
+            parts: Vec::new(),
+            pcm: PcmWindow::default(),
+            chunks: 0,
+        }
+    }
+
+    fn add_audio(&mut self, samples: &[i16]) {
+        self.pcm.samples.extend_from_slice(samples);
+    }
+
+    /// Cuts `spans` into requests and passes each to `send` before cutting the next, so a full
+    /// channel holds back the audio still to be padded. A chunk the merger is still growing
+    /// waits for later spans or [`Self::finish`].
+    fn cut(
+        &mut self,
+        spans: impl Iterator<Item = SpeechSpan>,
+        mut send: impl FnMut(Request) -> Result<()>,
+    ) -> Result<()> {
+        for span in spans {
+            // Segmenters should respect the limit; split defensively if one does not.
+            let mut start = span.start;
+            while start < span.end {
+                let piece = SpeechSpan {
+                    start,
+                    end: (start + self.max_len).min(span.end),
+                };
+                start = piece.end;
+                let Some(merger) = &mut self.merger else {
+                    send(self.request(piece, vec![piece]))?;
+                    continue;
+                };
+                match merger.push(piece) {
+                    // `piece` starts a new chunk; the finished one holds the parts so far.
+                    Some(finished) => {
+                        let parts = std::mem::replace(&mut self.parts, vec![piece]);
+                        send(self.request(finished, parts))?;
+                    }
+                    None => self.parts.push(piece),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The request for the chunk the merger was still growing when the recording ended.
+    fn finish(&mut self) -> Option<Request> {
+        let span = self.merger.as_mut()?.finish()?;
+        let parts = std::mem::take(&mut self.parts);
+        Some(self.request(span, parts))
+    }
+
+    /// Drops audio before `sample`, except what the chunk being merged still needs.
+    fn discard_before(&mut self, sample: usize) {
+        let keep = self
+            .merger
+            .as_ref()
+            .and_then(Merger::retain_from)
+            .map_or(sample, |start| start.min(sample));
+        self.pcm.discard_before(keep);
+    }
+
+    /// The request for the chunk covering `span`, which holds the speech spans `speech`.
+    fn request(&mut self, span: SpeechSpan, speech: Vec<SpeechSpan>) -> Request {
+        let index = self.chunks;
+        self.chunks += 1;
+        let (samples, lead) = pad(self.pcm.slice(span), self.padding, index);
+        Request {
+            chunk: AudioChunk {
+                index,
+                start: samples_to_seconds(span.start),
+                end: samples_to_seconds(span.end),
+                lead_in: samples_to_seconds(lead),
+                samples,
+            },
+            first_sample: span.start,
+            lead,
+            speech: Some(speech),
+        }
+    }
+}
+
 /// Decoded samples from `offset` onwards.
+#[derive(Default)]
 struct PcmWindow {
     offset: usize,
     samples: Vec<i16>,
@@ -580,119 +727,6 @@ impl PcmWindow {
             self.samples.drain(..droppable);
             self.offset += droppable;
         }
-    }
-}
-
-const BLOCK_SAMPLES: usize = SAMPLE_RATE as usize; // one second
-
-impl Producer {
-    fn run(self) -> Result<()> {
-        let duration = self.decoder.probe_duration(&self.path);
-        self.send(Produced::Started(duration))?;
-
-        let mut session = self.segmenter.begin()?;
-        let mut reader = self.decoder.open(&self.path)?;
-        let mut merger = self.merge.then(|| Merger::new(self.max_len));
-        // Speech spans inside the chunk the merger is still growing.
-        let mut parts = Vec::new();
-        let mut pcm = PcmWindow {
-            offset: 0,
-            samples: Vec::new(),
-        };
-        let mut block = Vec::with_capacity(BLOCK_SAMPLES);
-        let mut floats = Vec::with_capacity(BLOCK_SAMPLES);
-        let mut spans = Vec::new();
-        let mut decoded = 0usize;
-        let mut chunks = 0usize;
-
-        loop {
-            let read = reader.read(&mut block, BLOCK_SAMPLES)?;
-            if read == 0 {
-                break;
-            }
-            decoded += read;
-            pcm.samples.extend_from_slice(&block);
-            floats.clear();
-            floats.extend(block.iter().map(|&s| f32::from(s) / 32768.0));
-            session.push(&floats, &mut spans)?;
-            self.emit_spans(&mut spans, &mut merger, &mut parts, &pcm, &mut chunks)?;
-            self.send(Produced::Decoded(samples_to_seconds(decoded)))?;
-
-            let keep = merger
-                .as_ref()
-                .and_then(Merger::retain_from)
-                .map_or(session.retain_from(), |m| m.min(session.retain_from()));
-            pcm.discard_before(keep);
-        }
-
-        session.finish(&mut spans)?;
-        self.emit_spans(&mut spans, &mut merger, &mut parts, &pcm, &mut chunks)?;
-        if let Some(span) = merger.as_mut().and_then(Merger::finish) {
-            self.emit(span, std::mem::take(&mut parts), &pcm, &mut chunks)?;
-        }
-        self.send(Produced::Segmented(chunks))
-    }
-
-    fn emit_spans(
-        &self,
-        spans: &mut Vec<SpeechSpan>,
-        merger: &mut Option<Merger>,
-        parts: &mut Vec<SpeechSpan>,
-        pcm: &PcmWindow,
-        chunks: &mut usize,
-    ) -> Result<()> {
-        for span in spans.drain(..) {
-            // Segmenters should respect the limit; split defensively if one does not.
-            let mut start = span.start;
-            while start < span.end {
-                let piece = SpeechSpan {
-                    start,
-                    end: (start + self.max_len).min(span.end),
-                };
-                start = piece.end;
-                match merger {
-                    Some(merger) => match merger.push(piece) {
-                        // `piece` starts a new chunk; the finished one holds the parts so far.
-                        Some(finished) => {
-                            let done = std::mem::replace(parts, vec![piece]);
-                            self.emit(finished, done, pcm, chunks)?;
-                        }
-                        None => parts.push(piece),
-                    },
-                    None => self.emit(piece, vec![piece], pcm, chunks)?,
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Sends the chunk covering `span`, which holds the speech spans `speech`.
-    fn emit(
-        &self,
-        span: SpeechSpan,
-        speech: Vec<SpeechSpan>,
-        pcm: &PcmWindow,
-        chunks: &mut usize,
-    ) -> Result<()> {
-        let index = *chunks;
-        *chunks += 1;
-        let (samples, lead) = pad(pcm.slice(span), self.padding, index);
-        self.send(Produced::Chunk(Box::new(Request {
-            chunk: AudioChunk {
-                index,
-                start: samples_to_seconds(span.start),
-                end: samples_to_seconds(span.end),
-                lead_in: samples_to_seconds(lead),
-                samples,
-            },
-            first_sample: span.start,
-            lead,
-            speech: Some(speech),
-        })))
-    }
-
-    fn send(&self, message: Produced) -> Result<()> {
-        self.tx.blocking_send(message).map_err(|_| Error::Cancelled)
     }
 }
 
@@ -904,6 +938,20 @@ mod tests {
         // Regions reaching past the chunk are clamped to it.
         let clamped = chunk.resend(span(53 * S, 60 * S), None);
         assert_eq!(clamped.chunk.samples.len(), S);
+    }
+
+    #[test]
+    fn cutting_stops_at_the_first_request_that_cannot_be_sent() {
+        // One second of audio in 1ms chunks would be a thousand padded requests.
+        let mut chunker = Chunker::new(S / 1000, false, Some(Padding::silence(0.5)));
+        chunker.add_audio(&vec![0; S]);
+        let mut sent = 0;
+        let result = chunker.cut(std::iter::once(span(0, S)), |_| {
+            sent += 1;
+            Err(Error::Cancelled)
+        });
+        assert!(matches!(result, Err(Error::Cancelled)));
+        assert_eq!((sent, chunker.chunks), (1, 1));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
-use super::OutputWriter;
+use super::{OutputWriter, tmp_path};
 use crate::source::{Input, Media, MediaItem};
 use crate::{Error, Result};
 
@@ -127,29 +127,27 @@ impl Layout {
         self.reserve(&dir, &name)
     }
 
+    /// Finds a name whose files are all free in `dir`, then reserves those files.
     fn reserve(&mut self, dir: &Path, name: &str) -> Result<Target> {
         let writer = self.writer.clone().in_dir(normalize_dir(dir)?);
+        // Atomic writes need temporary files as well as their final destinations.
+        let files = |name: &str| {
+            let outputs = writer.outputs(name);
+            let temporary: Vec<_> = outputs.iter().map(|path| tmp_path(path)).collect();
+            outputs.into_iter().chain(temporary).collect::<Vec<_>>()
+        };
         let name = unique_name(name, |candidate| {
-            let outputs = writer.outputs(candidate);
-            // Atomic writes need temporary files as well as their final destinations.
-            let mut paths = outputs.clone();
-            paths.extend(outputs.iter().map(|path| {
-                let mut tmp = path.as_os_str().to_owned();
-                tmp.push(".tmp");
-                PathBuf::from(tmp)
-            }));
-            if paths.iter().any(|path| {
-                self.reserved.contains(&path_key(path))
-                    || self.directories.contains(&path_key(path))
-                    || path.is_dir()
-            }) {
-                return false;
-            }
-            self.reserved
-                .extend(paths.iter().map(|path| path_key(path)));
-            true
+            files(candidate).iter().all(|path| self.is_free(path))
         });
+        self.reserved
+            .extend(files(&name).iter().map(|path| path_key(path)));
         Ok(Target { writer, name })
+    }
+
+    /// Whether nothing in this run and no existing directory uses `path`.
+    fn is_free(&self, path: &Path) -> bool {
+        let key = path_key(path);
+        !self.reserved.contains(&key) && !self.directories.contains(&key) && !path.is_dir()
     }
 
     /// The sample report is allocated last so it cannot replace a transcript or directory.
@@ -159,17 +157,14 @@ impl Layout {
         } else {
             self.writer.dir()
         })?;
-        let name = unique_name("sample", |name| {
-            let path = dir.join(format!("{name}.csv"));
-            !self.reserved.contains(&path_key(&path))
-                && !self.directories.contains(&path_key(&path))
-                && !path.is_dir()
-        });
-        Ok(dir.join(format!("{name}.csv")))
+        let path = |name: &str| dir.join(format!("{name}.csv"));
+        let name = unique_name("sample", |name| self.is_free(&path(name)));
+        Ok(path(&name))
     }
 }
 
-/// Claim the original name, or the first available numeric suffix.
+/// Returns `name` when `claim` accepts it, otherwise the first of `name-2`, `name-3`, …
+/// that it accepts.
 pub(crate) fn unique_name(name: &str, mut claim: impl FnMut(&str) -> bool) -> String {
     let mut candidate = name.to_owned();
     let mut suffix = 2;

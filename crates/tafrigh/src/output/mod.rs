@@ -141,14 +141,19 @@ impl OutputWriter {
     }
 }
 
+/// The temporary file [`write_atomic`] writes before renaming it to `path`.
+fn tmp_path(path: &Path) -> PathBuf {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    tmp.into()
+}
+
 /// Writes through a temporary file and renames it, so readers never see partial files.
 fn write_atomic(
     path: &Path,
     write: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
 ) -> Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
+    let tmp = tmp_path(path);
     let result = (|| {
         let file = std::fs::File::create(&tmp)?;
         let mut out = std::io::BufWriter::new(file);

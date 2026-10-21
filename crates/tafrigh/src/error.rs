@@ -110,6 +110,18 @@ impl fmt::Display for ErrorChain<'_> {
     }
 }
 
+/// The outcome of a spawned task: its panic is resumed, and cancellation becomes
+/// [`Error::Cancelled`].
+pub(crate) fn task_result<T>(
+    joined: std::result::Result<Result<T>, tokio::task::JoinError>,
+) -> Result<T> {
+    match joined {
+        Ok(result) => result,
+        Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
+        Err(_) => Err(Error::Cancelled),
+    }
+}
+
 impl Error {
     /// Adds context to an I/O error from the pipeline or a backend.
     pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
