@@ -47,7 +47,7 @@ pub struct ChunkOptions {
     /// Resend speech the recognizer skipped: when a chunk's words leave at least this much
     /// detected speech uncovered, that stretch goes out again as its own request. Recognizers
     /// such as Wit sometimes stop transcribing partway through a chunk. Needs word timings;
-    /// `None` disables.
+    /// `None` disables. Rejected when [`ChunkRecognizer::word_timings`] is false.
     pub resend_gaps: Option<Duration>,
 }
 
@@ -88,7 +88,8 @@ impl ChunkedTranscriber {
     /// `Arc<dyn Segmenter>` and `Arc<dyn ChunkRecognizer>` chosen at runtime.
     ///
     /// Fails when `options` are out of range or chunks (plus padding) would exceed the
-    /// recognizer's [`ChunkRecognizer::max_audio_duration`].
+    /// recognizer's [`ChunkRecognizer::max_audio_duration`], or when gap resends are enabled
+    /// for a recognizer without word timings.
     pub fn new(
         segmenter: impl Segmenter + 'static,
         recognizer: impl ChunkRecognizer + 'static,
@@ -99,6 +100,12 @@ impl ChunkedTranscriber {
         if duration_to_samples(options.max_chunk) == 0 {
             return Err(Error::Config(
                 "maximum chunk duration must be at least one sample".into(),
+            ));
+        }
+        if options.resend_gaps.is_some() && !recognizer.word_timings() {
+            return Err(Error::Config(
+                "gap resends require a recognizer with word timings; set resend_gaps to None"
+                    .into(),
             ));
         }
         if let Some(gap) = options.resend_gaps
@@ -818,6 +825,51 @@ mod tests {
         async fn recognize(&self, _chunk: &AudioChunk) -> Result<Recognition, BoxError> {
             Ok(Recognition::default())
         }
+    }
+
+    struct UntimedRecognizer;
+
+    #[async_trait::async_trait]
+    impl ChunkRecognizer for UntimedRecognizer {
+        async fn recognize(&self, _chunk: &AudioChunk) -> Result<Recognition, BoxError> {
+            Ok(Recognition::text("speech without word timings"))
+        }
+
+        fn word_timings(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn gap_resends_require_word_timings_even_through_arc() {
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(15)).unwrap();
+        let recognizer: Arc<dyn ChunkRecognizer> = Arc::new(UntimedRecognizer);
+        assert!(!recognizer.word_timings());
+        let error =
+            ChunkedTranscriber::new(segmenter, recognizer, ChunkOptions::default()).unwrap_err();
+        assert!(matches!(error, Error::Config(_)));
+        assert!(error.to_string().contains("gap resends require"));
+    }
+
+    #[test]
+    fn untimed_recognizer_is_accepted_with_gap_resends_disabled() {
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(15)).unwrap();
+        ChunkedTranscriber::new(
+            segmenter,
+            UntimedRecognizer,
+            ChunkOptions {
+                resend_gaps: None,
+                ..ChunkOptions::default()
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn recognizers_supply_word_timings_by_default() {
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(15)).unwrap();
+        assert!(NoopRecognizer.word_timings());
+        ChunkedTranscriber::new(segmenter, NoopRecognizer, ChunkOptions::default()).unwrap();
     }
 
     /// Accepts up to its duration of audio per request.
