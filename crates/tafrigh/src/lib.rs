@@ -12,7 +12,7 @@
 //! - [`source`]: resolving inputs (local files, folders, URLs through `yt-dlp`) into media items.
 //! - [`output`]: compaction and transcript formats (txt, srt, vtt, csv, tsv, json).
 //! - [`pipeline`]: [`Tafrigh`], which ties sources, a transcriber and outputs together and
-//!   reports progress as [`Event`]s.
+//!   reports progress as [`Event`]s. [`Tafrigh::youtube`] retrieves existing captions without audio.
 //!
 //! Recognizers live in their own crates (e.g. `tafrigh-wit`) and only depend on the
 //! [`ChunkRecognizer`] trait, so new backends do not touch this crate.

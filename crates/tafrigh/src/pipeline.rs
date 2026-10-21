@@ -36,7 +36,7 @@ use crate::{Error, ErrorChain, Result, Segment, Transcriber};
 /// # }
 /// ```
 pub struct Tafrigh {
-    transcriber: Arc<dyn Transcriber>,
+    backend: Backend,
     output: OutputWriter,
     output_mode: OutputMode,
     ytdlp: YtDlp,
@@ -60,13 +60,19 @@ impl std::fmt::Debug for Tafrigh {
 
 /// Configures a [`Tafrigh`] run; created by [`Tafrigh::builder`].
 pub struct TafrighBuilder {
-    transcriber: Arc<dyn Transcriber>,
+    backend: Backend,
     output: OutputWriter,
     output_mode: OutputMode,
     ytdlp: Option<YtDlp>,
     recursive: bool,
     skip_existing: bool,
     sample: usize,
+}
+
+/// A run has exactly one backend. Caption runs never construct or invoke an audio transcriber.
+enum Backend {
+    Media(Arc<dyn Transcriber>),
+    Youtube { language: String },
 }
 
 struct PrefetchedDownload(Option<tokio::task::JoinHandle<Result<PathBuf>>>);
@@ -163,7 +169,7 @@ impl TafrighBuilder {
             })
         });
         Tafrigh {
-            transcriber: self.transcriber,
+            backend: self.backend,
             output: self.output,
             output_mode: self.output_mode,
             ytdlp,
@@ -223,8 +229,21 @@ pub enum ItemStatus {
 impl Tafrigh {
     /// Starts configuring a run with `transcriber` (which may be an `Arc<dyn Transcriber>`).
     pub fn builder(transcriber: impl Transcriber + 'static) -> TafrighBuilder {
+        Self::with_backend(Backend::Media(Arc::new(transcriber)))
+    }
+
+    /// Configures a run that retrieves existing [YouTube](https://www.youtube.com) captions in one language.
+    /// Manual captions take precedence over original automatic captions. Missing captions
+    /// fail the item; there is no speech recognition or translation fallback.
+    pub fn youtube(language: impl Into<String>) -> TafrighBuilder {
+        Self::with_backend(Backend::Youtube {
+            language: language.into(),
+        })
+    }
+
+    fn with_backend(backend: Backend) -> TafrighBuilder {
         TafrighBuilder {
-            transcriber: Arc::new(transcriber),
+            backend,
             output: OutputWriter::new("."),
             output_mode: OutputMode::default(),
             ytdlp: None,
@@ -236,6 +255,19 @@ impl Tafrigh {
 
     /// Resolves the media items behind an input.
     pub async fn resolve(&self, input: &Input) -> Result<Vec<MediaItem>> {
+        if let Backend::Youtube { language } = &self.backend {
+            if !crate::source::is_subtitle_language(language) {
+                return Err(Error::Source(
+                    "expected one subtitle language code, such as ar or en-US".into(),
+                ));
+            }
+            let Input::Url(url) = input else {
+                return Err(Error::Source(
+                    "the youtube transcriber requires YouTube URLs".into(),
+                ));
+            };
+            return self.ytdlp.resolve_youtube(url).await;
+        }
         match input {
             Input::Path(path) => {
                 let path = path.clone();
@@ -369,8 +401,14 @@ impl Tafrigh {
             });
             let total = items.len();
             for (position, item) in items.into_iter().enumerate() {
-                let directory = layout
-                    .directory(&item, index)
+                let directory = if matches!(self.backend, Backend::Youtube { .. })
+                    && self.output_mode == OutputMode::SideBySide
+                {
+                    Some(self.ytdlp.download_dir().to_owned())
+                } else {
+                    layout.directory(&item, index)
+                };
+                let directory = directory
                     .map(|dir| layout.require_directory(&dir))
                     .transpose();
                 resolved.push((item, directory, position + 1, total));
@@ -502,7 +540,8 @@ impl Tafrigh {
     }
 
     fn prefetch_download(&self, next: &Queued) -> Option<PrefetchedDownload> {
-        if next.planning_error.is_some()
+        if matches!(self.backend, Backend::Youtube { .. })
+            || next.planning_error.is_some()
             || !matches!(next.item.media, Media::Remote { .. })
             || (self.skip_existing && next.output.as_ref().is_some_and(Target::exists))
         {
@@ -524,7 +563,15 @@ impl Tafrigh {
         events: &dyn Progress<Event>,
         download: Option<PrefetchedDownload>,
         sent: &Notify,
-    ) -> Result<(PathBuf, Vec<Segment>)> {
+    ) -> Result<(Option<PathBuf>, Vec<Segment>)> {
+        let transcriber = match &self.backend {
+            Backend::Youtube { language } => {
+                events.report(Event::FetchingCaptions { item: info.clone() });
+                let segments = self.ytdlp.captions(item, language).await?;
+                return Ok((None, segments));
+            }
+            Backend::Media(transcriber) => transcriber,
+        };
         let path = self.media_path(item, info, events, download).await?;
         let progress = |event: TranscribeEvent| {
             if matches!(event, TranscribeEvent::Segmented { .. }) {
@@ -535,8 +582,8 @@ impl Tafrigh {
                 event,
             });
         };
-        let segments = self.transcriber.transcribe(&path, &progress).await?;
-        Ok((path, segments))
+        let segments = transcriber.transcribe(&path, &progress).await?;
+        Ok((Some(path), segments))
     }
 
     async fn media_path(
@@ -577,7 +624,7 @@ impl Tafrigh {
                 return Ok(ItemStatus::Skipped);
             }
             Outcome::Transcribed { path, segments } => self
-                .write_item(next, &path, &segments, samples)
+                .write_item(next, path.as_deref(), &segments, samples)
                 .map(|outputs| (segments.len(), outputs)),
             Outcome::Failed(err) => Err(err),
         };
@@ -606,7 +653,7 @@ impl Tafrigh {
     fn write_item(
         &self,
         next: &Queued,
-        path: &std::path::Path,
+        path: Option<&std::path::Path>,
         segments: &[Segment],
         samples: &mut SampleReservoir,
     ) -> Result<Vec<PathBuf>> {
@@ -630,7 +677,7 @@ impl Tafrigh {
                     segment,
                     item: next.info.id.to_string(),
                     link: next.item.link.clone(),
-                    file: Some(path.to_owned()),
+                    file: path.map(std::path::Path::to_owned),
                 });
             }
         }
@@ -672,7 +719,7 @@ struct Done {
 enum Outcome {
     Skipped,
     Transcribed {
-        path: PathBuf,
+        path: Option<PathBuf>,
         segments: Vec<Segment>,
     },
     Failed(Error),

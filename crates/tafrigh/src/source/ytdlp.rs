@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use serde_json::Value;
 use tokio::process::Command;
 
-use super::{Media, MediaItem, is_media_path};
-use crate::{Error, Result};
+use super::{Media, MediaItem, captions, is_media_path};
+use crate::{Error, Result, Segment};
 
 /// Resolves and downloads URLs with the `yt-dlp` executable.
 ///
@@ -45,7 +45,8 @@ impl YtDlp {
         self
     }
 
-    /// Extra yt-dlp arguments, appended after tafrigh's own (so they take precedence).
+    /// Extra yt-dlp arguments. Audio downloads allow overrides; caption retrieval enforces
+    /// simulation/download mode, track selection and temporary output paths after these args.
     #[must_use]
     pub fn args<I, S>(mut self, args: I) -> Self
     where
@@ -89,7 +90,31 @@ impl YtDlp {
                 url,
             )
             .await?;
-        let info: Value = serde_json::from_slice(&output).map_err(|err| {
+        self.items_from_info(url, &output).await
+    }
+
+    /// Resolves [YouTube](https://www.youtube.com) videos, playlists and channels without requiring audio formats.
+    pub async fn resolve_youtube(&self, url: &str) -> Result<Vec<MediaItem>> {
+        if !captions::is_youtube_url(url) {
+            return Err(Error::Source(
+                "the youtube transcriber requires YouTube URLs".into(),
+            ));
+        }
+        let mut command = self.caption_command();
+        command.args([
+            "--flat-playlist",
+            "--dump-single-json",
+            "--ignore-errors",
+            "--simulate",
+            "--",
+            url,
+        ]);
+        let output = self.execute(command, url, true).await?;
+        self.items_from_info(url, &output).await
+    }
+
+    async fn items_from_info(&self, url: &str, output: &[u8]) -> Result<Vec<MediaItem>> {
+        let info: Value = serde_json::from_slice(output).map_err(|err| {
             Error::Source(format!("yt-dlp returned invalid JSON for {url}: {err}"))
         })?;
 
@@ -143,6 +168,98 @@ impl YtDlp {
             });
         }
         Ok(items)
+    }
+
+    /// Fetches existing captions in exactly `language`, preferring manual captions to
+    /// original automatic captions. Missing or translated-only tracks fail the item.
+    /// Audio is never downloaded. Temporary caption files are removed after parsing.
+    pub async fn captions(&self, item: &MediaItem, language: &str) -> Result<Vec<Segment>> {
+        if !captions::is_subtitle_language(language) {
+            return Err(Error::Source(
+                "expected one subtitle language code, such as ar or en-US".into(),
+            ));
+        }
+        let Media::Remote { url } = &item.media else {
+            return Err(Error::Source(
+                "the youtube transcriber requires YouTube URLs".into(),
+            ));
+        };
+        if !captions::is_youtube_url(url) {
+            return Err(Error::Source(
+                "the youtube transcriber requires YouTube URLs".into(),
+            ));
+        }
+        let mut command = self.caption_command();
+        command.args([
+            "--no-playlist",
+            "--dump-single-json",
+            "--simulate",
+            "--",
+            url,
+        ]);
+        let output = self.execute(command, url, false).await?;
+        let mut info: Value = serde_json::from_slice(&output).map_err(|err| {
+            Error::Source(format!("yt-dlp returned invalid JSON for {url}: {err}"))
+        })?;
+        captions::select_track(&mut info, language)?;
+
+        let temporary =
+            tempfile::tempdir().map_err(|err| Error::io("creating caption directory", err))?;
+        let metadata = temporary.path().join("selected.info.json");
+        tokio::fs::write(
+            &metadata,
+            serde_json::to_vec(&info).expect("JSON value serializes"),
+        )
+        .await
+        .map_err(|err| Error::io("writing selected caption metadata", err))?;
+        // Escape literal percent signs in TMPDIR before adding yt-dlp's extension template.
+        let template = format!(
+            "{}/captions.%(ext)s",
+            temporary.path().to_string_lossy().replace('%', "%%")
+        );
+        let mut command = self.caption_command();
+        command
+            .args([
+                "--no-playlist",
+                "--no-simulate",
+                "--write-subs",
+                "--no-write-auto-subs",
+                "--sub-langs",
+                language,
+                "--sub-format",
+                "json3",
+                "--convert-subs",
+                "none",
+                "--no-embed-subs",
+                "--no-write-info-json",
+                "--no-write-thumbnail",
+                "--output",
+                &template,
+                "--output",
+                &format!("subtitle:{template}"),
+                "--load-info-json",
+            ])
+            .arg(&metadata);
+        self.execute(command, url, false).await?;
+        let path = temporary.path().join(format!("captions.{language}.json3"));
+        let bytes = tokio::fs::read(&path).await.map_err(|err| {
+            Error::io(
+                format!("reading downloaded {language} captions for {url}"),
+                err,
+            )
+        })?;
+        captions::parse_json3(&bytes)
+    }
+
+    fn caption_command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(&self.args).args([
+            "--skip-download",
+            "--ignore-no-formats-error",
+            "--no-progress",
+            "--quiet",
+        ]);
+        command
     }
 
     /// Downloads the audio of `item` (or reuses an earlier download) and returns its path.
@@ -200,11 +317,18 @@ impl YtDlp {
     /// Runs yt-dlp on `url` and returns its stdout. Warnings are logged; a run that failed
     /// without output becomes an error carrying yt-dlp's last error line.
     async fn run<'a>(&self, own: impl IntoIterator<Item = &'a str>, url: &str) -> Result<Vec<u8>> {
-        let output = Command::new(&self.program)
-            .args(own)
-            .args(&self.args)
-            .arg("--")
-            .arg(url)
+        let mut command = Command::new(&self.program);
+        command.args(own).args(&self.args).arg("--").arg(url);
+        self.execute(command, url, true).await
+    }
+
+    async fn execute(
+        &self,
+        mut command: Command,
+        url: &str,
+        allow_partial: bool,
+    ) -> Result<Vec<u8>> {
+        let output = command
             .stdin(Stdio::null())
             .kill_on_drop(true)
             .output()
@@ -214,7 +338,7 @@ impl YtDlp {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let diagnostics = Diagnostics::parse(&stderr);
         diagnostics.warnings.iter().for_each(|w| self.log_once(w));
-        if !output.status.success() && output.stdout.is_empty() {
+        if !output.status.success() && (!allow_partial || output.stdout.is_empty()) {
             let message = diagnostics
                 .errors
                 .last()

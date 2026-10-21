@@ -129,6 +129,16 @@ impl Ui {
                     item.bar.set_message("· downloading");
                 }
             }
+            Event::FetchingCaptions { item } => {
+                if let Some(item) = state.items.get(&item.id) {
+                    item.bar.set_style(
+                        ProgressStyle::with_template(
+                            "{prefix} {spinner} fetching captions [{elapsed_precise}]",
+                        )
+                        .expect("template"),
+                    );
+                }
+            }
             Event::Transcribing { item, event } => {
                 if let Some(item) = state.items.get_mut(&item.id) {
                     item.transcribe_event(&event);
