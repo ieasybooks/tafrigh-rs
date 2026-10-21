@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io::{self, Write};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::Segment;
 
@@ -101,6 +102,12 @@ impl BuiltinFormat {
     /// True for the `Words*` formats.
     pub fn is_word_level(self) -> bool {
         Self::WORDS.contains(&self)
+    }
+}
+
+impl From<BuiltinFormat> for Arc<dyn Format> {
+    fn from(format: BuiltinFormat) -> Self {
+        Arc::new(format)
     }
 }
 

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use tafrigh::output::{BuiltinFormat, Format, OutputMode, OutputWriter};
+use tafrigh::output::{BuiltinFormat, OutputMode, OutputWriter};
 use tafrigh::source::Input;
 use tafrigh::{
     Event, ItemStatus, NoProgress, Progress, Result, Segment, Tafrigh, TranscribeEvent, Transcriber,
@@ -36,7 +36,7 @@ fn media(root: &Path, name: &str, text: &str) -> PathBuf {
 }
 
 fn writer(dir: &Path) -> OutputWriter {
-    OutputWriter::new(dir).formats([Arc::new(BuiltinFormat::Txt) as Arc<dyn Format>])
+    OutputWriter::new(dir).formats([BuiltinFormat::Txt])
 }
 
 fn assert_text(path: &Path, text: &str) {
@@ -219,10 +219,7 @@ async fn side_by_side_preserves_directories_for_every_output_variant() {
         let input = media(root, "a.mp3", "recording");
         std::fs::create_dir(root.join(directory)).unwrap();
         let output = OutputWriter::new(root)
-            .formats([
-                Arc::new(BuiltinFormat::Srt) as Arc<dyn Format>,
-                Arc::new(BuiltinFormat::WordsSrt),
-            ])
+            .formats([BuiltinFormat::Srt, BuiltinFormat::WordsSrt])
             .keep_uncompacted(true);
         let report = Tafrigh::builder(RecordingTranscriber::default())
             .output(output)
@@ -254,10 +251,7 @@ async fn sample_report_avoids_mirrored_directories_and_transcripts() {
             media(root, "in/sample.mp3", "sample recording");
         }
         let report = Tafrigh::builder(RecordingTranscriber::default())
-            .output(
-                OutputWriter::new(root.join("out"))
-                    .formats([Arc::new(BuiltinFormat::Csv) as Arc<dyn Format>]),
-            )
+            .output(OutputWriter::new(root.join("out")).formats([BuiltinFormat::Csv]))
             .output_mode(OutputMode::TreeToTree)
             .recursive(true)
             .sample(3)
@@ -330,10 +324,8 @@ async fn existing_outputs_are_skipped_only_when_all_requested_files_exist() {
     let txt = media(root, "out/talk.txt", "existing text");
     let srt = media(root, "out/talk.srt", "existing subtitles");
     let transcriber = Arc::new(RecordingTranscriber::default());
-    let output = OutputWriter::new(root.join("out")).formats([
-        Arc::new(BuiltinFormat::Txt) as Arc<dyn Format>,
-        Arc::new(BuiltinFormat::Srt),
-    ]);
+    let output =
+        OutputWriter::new(root.join("out")).formats([BuiltinFormat::Txt, BuiltinFormat::Srt]);
     let pipeline = Tafrigh::builder(transcriber.clone())
         .output(output.clone())
         .skip_existing(true)

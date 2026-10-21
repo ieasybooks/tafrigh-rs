@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use tafrigh::output::{BuiltinFormat, Format, OutputMode, OutputWriter};
+use tafrigh::output::{BuiltinFormat, OutputMode, OutputWriter};
 use tafrigh::source::{Input, Media, MediaItem, YtDlp};
 use tafrigh::{CaptionProvider, Error, Event, ItemStatus, Result, Segment, Tafrigh};
 
@@ -58,10 +58,7 @@ async fn external_caption_providers_share_layouts_skipping_and_item_failures() {
         let provider = Arc::new(RecordedCaptions::default());
         let shared: Arc<dyn CaptionProvider> = provider.clone();
         let pipeline = Tafrigh::captions(shared)
-            .output(
-                OutputWriter::new(&outputs)
-                    .formats([Arc::new(BuiltinFormat::Txt) as Arc<dyn Format>]),
-            )
+            .output(OutputWriter::new(&outputs).formats([BuiltinFormat::Txt]))
             .output_mode(mode)
             .ytdlp(YtDlp::new(&downloads).program(directory.path().join("no-yt-dlp")))
             .skip_existing(true)

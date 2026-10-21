@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use tafrigh::output::{BuiltinFormat, Format, OutputMode, OutputWriter};
+use tafrigh::output::{BuiltinFormat, OutputMode, OutputWriter};
 use tafrigh::source::Input;
 use tafrigh::{
     ItemStatus, NoProgress, Progress, Result, Segment, Tafrigh, TranscribeEvent, Transcriber,
@@ -34,10 +34,7 @@ fn media(root: &Path, relative: &str) -> PathBuf {
 
 fn writer(dir: &Path) -> OutputWriter {
     OutputWriter::new(dir)
-        .formats([
-            Arc::new(BuiltinFormat::Srt) as Arc<dyn Format>,
-            Arc::new(BuiltinFormat::WordsSrt),
-        ])
+        .formats([BuiltinFormat::Srt, BuiltinFormat::WordsSrt])
         .keep_uncompacted(true)
 }
 

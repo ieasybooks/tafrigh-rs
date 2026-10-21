@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::{Context, bail};
 use tafrigh::ChunkOptions;
 use tafrigh::audio::{Decoder, Padding};
-use tafrigh::output::{BuiltinFormat, Format, OutputWriter};
+use tafrigh::output::{BuiltinFormat, OutputWriter};
 use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
 use tafrigh::segment::{FixedWindows, Segmenter};
 use tafrigh::source::YtDlp;
@@ -28,7 +28,7 @@ impl Output {
     }
 
     /// Selected formats in order, without duplicates, plus word-level ones with `--words`.
-    pub(super) fn formats(&self) -> anyhow::Result<Vec<Arc<dyn Format>>> {
+    pub(super) fn formats(&self) -> anyhow::Result<Vec<BuiltinFormat>> {
         let mut formats: Vec<BuiltinFormat> = Vec::new();
         for choice in &self.formats {
             match choice {
@@ -49,10 +49,7 @@ impl Output {
         if formats.is_empty() {
             bail!("no output formats given");
         }
-        Ok(formats
-            .into_iter()
-            .map(|format| Arc::new(format) as Arc<dyn Format>)
-            .collect())
+        Ok(formats)
     }
 }
 
@@ -219,6 +216,8 @@ fn describe_unavailable(err: &tafrigh::Error, note: &str, install: &str, flag: &
 
 #[cfg(test)]
 mod tests {
+    use tafrigh::output::Format;
+
     use crate::cli::{Cli, Command};
 
     fn formats(flags: &[&str]) -> anyhow::Result<Vec<String>> {

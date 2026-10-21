@@ -41,19 +41,20 @@ impl OutputWriter {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: dir.into(),
-            formats: BuiltinFormat::ALL
-                .iter()
-                .map(|f| Arc::new(*f) as Arc<dyn Format>)
-                .collect(),
+            formats: BuiltinFormat::ALL.into_iter().map(Into::into).collect(),
             min_words: 1,
             keep_uncompacted: false,
         }
     }
 
-    /// Formats to write, replacing the defaults.
+    /// Formats to write, replacing the defaults: [`BuiltinFormat`]s, or your own [`Format`]s
+    /// as `Arc<dyn Format>`.
     #[must_use]
-    pub fn formats(mut self, formats: impl IntoIterator<Item = Arc<dyn Format>>) -> Self {
-        self.formats = formats.into_iter().collect();
+    pub fn formats<F: Into<Arc<dyn Format>>>(
+        mut self,
+        formats: impl IntoIterator<Item = F>,
+    ) -> Self {
+        self.formats = formats.into_iter().map(Into::into).collect();
         self
     }
 
@@ -178,7 +179,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path().join("out");
         let writer = OutputWriter::new(&dir)
-            .formats([Arc::new(BuiltinFormat::Txt) as Arc<dyn Format>])
+            .formats([BuiltinFormat::Txt])
             .min_words(2)
             .keep_uncompacted(true);
         let segments = [

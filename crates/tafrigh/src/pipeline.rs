@@ -879,10 +879,8 @@ printf '%s\n' "$path"
         permissions.set_mode(0o755);
         std::fs::set_permissions(&script, permissions).unwrap();
 
-        let output = OutputWriter::new(dir.join("outputs"))
-            .formats([
-                Arc::new(crate::output::BuiltinFormat::Txt) as Arc<dyn crate::output::Format>
-            ]);
+        let output =
+            OutputWriter::new(dir.join("outputs")).formats([crate::output::BuiltinFormat::Txt]);
         let transcriber = RecordingTranscriber { log: log.clone() };
         let tafrigh = Tafrigh::builder(transcriber)
             .output(output)
@@ -977,11 +975,7 @@ printf '%s\n' "$path"
             .collect();
         let transcriber = Arc::new(Draining::default());
         let tafrigh = Tafrigh::builder(transcriber.clone())
-            .output(
-                OutputWriter::new(dir.join("out"))
-                    .formats([Arc::new(crate::output::BuiltinFormat::Txt)
-                        as Arc<dyn crate::output::Format>]),
-            )
+            .output(OutputWriter::new(dir.join("out")).formats([crate::output::BuiltinFormat::Txt]))
             .build();
         let finished = Mutex::new(Vec::new());
         let collect = |event: Event| {
@@ -1036,9 +1030,7 @@ printf '%s\n' "$path"
             .collect();
         let transcriber = Arc::new(Draining::default());
         let tafrigh = Tafrigh::builder(transcriber.clone())
-            .output(OutputWriter::new(&out).formats([
-                Arc::new(crate::output::BuiltinFormat::Txt) as Arc<dyn crate::output::Format>
-            ]))
+            .output(OutputWriter::new(&out).formats([crate::output::BuiltinFormat::Txt]))
             .skip_existing(true)
             .build();
         let outcomes = Mutex::new(Vec::new());

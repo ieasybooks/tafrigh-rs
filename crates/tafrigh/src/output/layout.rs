@@ -222,10 +222,8 @@ fn path_key(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-    use crate::output::{BuiltinFormat, Format};
+    use crate::output::BuiltinFormat;
 
     #[test]
     fn directory_roots_are_reserved_before_any_discovery() {
@@ -235,8 +233,7 @@ mod tests {
         std::fs::create_dir(&first).unwrap();
         std::fs::create_dir(&second).unwrap();
         let out = temp.path().join("out");
-        let writer =
-            OutputWriter::new(&out).formats([Arc::new(BuiltinFormat::Txt) as Arc<dyn Format>]);
+        let writer = OutputWriter::new(&out).formats([BuiltinFormat::Txt]);
         let mut layout = Layout::new(
             OutputMode::TreeToTree,
             writer,
@@ -251,9 +248,9 @@ mod tests {
         let dir = temp.path();
         let writer = OutputWriter::new(dir)
             .formats([
-                Arc::new(BuiltinFormat::Srt) as Arc<dyn Format>,
-                Arc::new(BuiltinFormat::WordsSrt),
-                Arc::new(BuiltinFormat::Csv),
+                BuiltinFormat::Srt,
+                BuiltinFormat::WordsSrt,
+                BuiltinFormat::Csv,
             ])
             .keep_uncompacted(true);
         let mut layout = Layout::new(OutputMode::Flat, writer, &[]);
