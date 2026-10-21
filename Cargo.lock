@@ -2002,7 +2002,7 @@ dependencies = [
 
 [[package]]
 name = "tafrigh"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2020,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "tafrigh-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "indicatif",
@@ -2038,7 +2038,7 @@ dependencies = [
 
 [[package]]
 name = "tafrigh-wit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -2056,7 +2056,7 @@ dependencies = [
 
 [[package]]
 name = "tafrigh-youtube"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "serde",
