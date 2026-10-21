@@ -2,6 +2,16 @@
 
 Read `README.md` for setup and project context. Use the toolchain pinned in `rust-toolchain.toml`. Install configured development tools with `mise install`.
 
+## Workflow and communication
+
+- Check relevant code and documentation before asking factual questions. Ask the user about intent and preferences when those remain unclear.
+- Do not invent requirements or silently choose unclear behavior. Ask before deciding output names, defaults, fallback behavior, supported options, or compatibility changes when the user has not settled them. Pause work that depends on the answer while continuing independent, authorized work.
+- Ask focused questions early. Give concise choices and explain their consequences. Clearly distinguish recommendations from approved decisions.
+- Carry the user's answers forward as constraints. Do not reopen settled decisions or treat silence as approval.
+- Use simple English in explanations, comments, and discussions. Keep progress updates focused on what you learned, what needs a decision, and what remains to verify. Avoid narrating every command.
+- Before declaring completion, challenge the approach, review the final diff for bugs and unrelated changes, and verify the requested behavior with realistic inputs where appropriate. Report what changed, what was tested, and any remaining uncertainty.
+- If a repeated mistake suggests a useful rule for `AGENTS.md`, propose the specific improvement and wait for user approval before adding it.
+
 ## Verification
 
 Run focused tests while iterating. Before handing off code changes, run these checks from the repository root:
