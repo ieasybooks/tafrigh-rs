@@ -1,7 +1,7 @@
 [package]
 name = "tafrigh-cli"
 description = "Command-line transcription of audio, video and playlists into subtitles and text with tafrigh."
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,9 +17,9 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-tafrigh = { path = "crates/tafrigh", version = "0.2.0" }
-tafrigh-wit = { path = "crates/tafrigh-wit", version = "0.2.0" }
-tafrigh-youtube = { path = "crates/tafrigh-youtube", version = "0.2.0" }
+tafrigh = { path = "crates/tafrigh", version = "0.3.0" }
+tafrigh-wit = { path = "crates/tafrigh-wit", version = "0.3.0" }
+tafrigh-youtube = { path = "crates/tafrigh-youtube", version = "0.3.0" }
 anyhow.workspace = true
 indicatif.workspace = true
 shell-words.workspace = true
