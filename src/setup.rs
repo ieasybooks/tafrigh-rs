@@ -1,4 +1,10 @@
-//! Turns parsed arguments into library objects, and checks the external programs they use.
+//! Turns parsed arguments into a plan of library settings, and checks the external programs
+//! a run uses.
+//!
+//! Each option's own range is checked here, while parsing, so those mistakes fail with Usage's
+//! diagnostics and exit code before any program, model or network request is touched. Library
+//! constructors still check how settings fit together when the run starts, such as whether
+//! `--max-chunk` leaves room for Silero's speech padding.
 
 use std::collections::HashSet;
 use std::io::ErrorKind;
@@ -6,20 +12,259 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, bail};
+use anyhow::bail;
 use tafrigh::ChunkOptions;
 use tafrigh::audio::{Decoder, Padding};
-use tafrigh::output::{BuiltinFormat, OutputWriter};
+use tafrigh::output::{BuiltinFormat, OutputMode, OutputWriter};
 use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
 use tafrigh::segment::{FixedWindows, Segmenter};
-use tafrigh::source::YtDlp;
+use tafrigh::source::{Input, YtDlp};
 use tafrigh_wit::{Endpoint, WitConfig};
+use tafrigh_youtube::YoutubeCaptions;
+use usage_rs::ValidationError;
 
-use crate::cli::{self, FormatChoice, Output, Segmentation, Tools, Wit};
+use crate::cli::{self, Args, Cli, Command, Completions, FormatChoice, Output, Tools, Transcriber};
+
+/// What the command line asks for, with each option checked.
+pub enum Plan {
+    /// Transcribe or retrieve captions.
+    Transcribe(Box<Run>),
+    /// Generate or install shell completions.
+    Completions(Completions),
+    /// Print the Usage specification.
+    Spec,
+}
+
+/// A transcription run built from checked options.
+pub struct Run {
+    pub inputs: Vec<Input>,
+    pub backend: Backend,
+    pub output: OutputWriter,
+    pub output_mode: OutputMode,
+    pub ytdlp: YtDlp,
+    pub recursive: bool,
+    pub skip_existing: bool,
+    pub sample: usize,
+    pub quiet: bool,
+    pub verbose: u8,
+}
+
+/// The backend a run uses, with its settings.
+pub enum Backend {
+    Wit(Box<WitRun>),
+    Youtube(YoutubeCaptions),
+}
+
+/// Settings for transcribing with Wit.
+pub struct WitRun {
+    pub decoder: Decoder,
+    pub segmenter: SegmenterConfig,
+    pub chunks: ChunkOptions,
+    pub wit: WitConfig,
+}
+
+/// The segmenter `--vad` selects, configured. Built when the run starts, because loading
+/// Silero takes a moment.
+pub enum SegmenterConfig {
+    Silero(SileroConfig),
+    FixedWindows(Duration),
+}
+
+impl SegmenterConfig {
+    pub fn build(self) -> tafrigh::Result<Arc<dyn Segmenter>> {
+        Ok(match self {
+            Self::Silero(config) => Arc::new(SileroSegmenter::new(config)?),
+            Self::FixedWindows(window) => Arc::new(FixedWindows::new(window)?),
+        })
+    }
+}
+
+impl TryFrom<Cli> for Plan {
+    type Error = ValidationError;
+
+    fn try_from(cli: Cli) -> Result<Self, ValidationError> {
+        Ok(match cli.command {
+            Command::Transcribe(args) => Self::Transcribe(Box::new(Run::try_from(*args)?)),
+            Command::Completions(args) => Self::Completions(args),
+            Command::Spec => Self::Spec,
+        })
+    }
+}
+
+impl TryFrom<Args> for Run {
+    type Error = ValidationError;
+
+    fn try_from(args: Args) -> Result<Self, ValidationError> {
+        let output_mode = args.output.mode()?;
+        let output = args.output.writer()?;
+        let ytdlp = args
+            .tools
+            .ytdlp(output_mode.dir().unwrap_or(Path::new(".")))?;
+        let backend = match args.transcriber {
+            Transcriber::Wit => Backend::Wit(Box::new(WitRun::try_from(&args)?)),
+            Transcriber::Youtube => Backend::Youtube(youtube(&args)?),
+        };
+        Ok(Self {
+            inputs: args
+                .inputs
+                .iter()
+                .map(|input| Input::parse(input))
+                .collect(),
+            backend,
+            output,
+            output_mode,
+            ytdlp,
+            recursive: args.recursive,
+            skip_existing: args.output.skip_existing,
+            sample: args.output.sample,
+            quiet: args.quiet,
+            verbose: args.verbose,
+        })
+    }
+}
+
+/// The captions backend: one exact language, and only URLs it supports.
+fn youtube(args: &Args) -> Result<YoutubeCaptions, ValidationError> {
+    let language = args.subtitle_language.as_deref().ok_or_else(|| {
+        ValidationError::field("--subtitle-language")
+            .reason("is required with --transcriber youtube")
+    })?;
+    let captions = YoutubeCaptions::new(language).map_err(|_| {
+        ValidationError::field("--subtitle-language").reason(
+            "expected one language code, such as ar or en-US; patterns and lists are not supported",
+        )
+    })?;
+    if args
+        .inputs
+        .iter()
+        .any(|input| !tafrigh_youtube::is_youtube_url(input))
+    {
+        return Err(
+            ValidationError::field("INPUT").reason("--transcriber youtube requires YouTube URLs")
+        );
+    }
+    Ok(captions)
+}
+
+impl TryFrom<&Args> for WitRun {
+    type Error = ValidationError;
+
+    fn try_from(args: &Args) -> Result<Self, ValidationError> {
+        if args.subtitle_language.is_some() {
+            return Err(ValidationError::field("--subtitle-language")
+                .reason("requires --transcriber youtube; use --wit-language for Wit"));
+        }
+        let segmentation = &args.segmentation;
+        let max_chunk = duration("--max-chunk", segmentation.max_chunk, Zero::Invalid)?;
+        let pad = duration("--pad", segmentation.pad, Zero::Disables)?;
+        let resend_gaps = duration("--resend-gaps", segmentation.resend_gaps, Zero::Disables)?;
+        if !(0.0..=1.0).contains(&segmentation.vad_threshold) {
+            return Err(ValidationError::field("--vad-threshold")
+                .value(segmentation.vad_threshold.to_string())
+                .reason("must be between 0 and 1"));
+        }
+        let padding = match (segmentation.pad_noise, pad.is_zero()) {
+            (Some(dbfs), _) if !dbfs.is_finite() || dbfs > 0.0 => {
+                return Err(ValidationError::field("--pad-noise")
+                    .value(dbfs.to_string())
+                    .reason("must be finite and at most 0 dBFS"));
+            }
+            (Some(_), true) => {
+                return Err(ValidationError::field("--pad-noise")
+                    .reason("requires --pad greater than zero"));
+            }
+            (None, true) => None,
+            (Some(dbfs), false) => Some(Padding::white_noise(pad, dbfs)),
+            (None, false) => Some(Padding::silence(pad)),
+        };
+
+        let request = max_chunk.saturating_add(pad.saturating_mul(2));
+        let wit = args.wit.config(request)?;
+        if request > wit.audio_limit() {
+            return Err(ValidationError::field("--max-chunk")
+                .value(segmentation.max_chunk.to_string())
+                .reason(format!(
+                    "chunk plus padding exceeds the {:?} Wit audio limit",
+                    wit.audio_limit()
+                )));
+        }
+
+        let segmenter = match segmentation.vad {
+            cli::Vad::Silero => SegmenterConfig::Silero(SileroConfig {
+                threshold: segmentation.vad_threshold,
+                min_speech: Duration::from_millis(segmentation.min_speech_ms.into()),
+                max_speech: max_chunk,
+                min_silence: Duration::from_millis(segmentation.min_silence_ms.into()),
+                speech_pad: Duration::from_millis(segmentation.speech_pad_ms.into()),
+            }),
+            cli::Vad::None => SegmenterConfig::FixedWindows(max_chunk),
+        };
+        let chunks = ChunkOptions {
+            max_chunk,
+            merge: segmentation.merge,
+            padding,
+            on_error: segmentation.on_chunk_error.into(),
+            max_in_flight: None,
+            resend_gaps: (!resend_gaps.is_zero()).then_some(resend_gaps),
+        };
+        Ok(Self {
+            decoder: args.tools.decoder(),
+            segmenter,
+            chunks,
+            wit,
+        })
+    }
+}
+
+/// Whether zero is a valid value for a duration option.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Zero {
+    Invalid,
+    /// Zero turns the option's feature off.
+    Disables,
+}
+
+/// `seconds` given to `flag`, as a duration.
+fn duration(flag: &'static str, seconds: f64, zero: Zero) -> Result<Duration, ValidationError> {
+    match Duration::try_from_secs_f64(seconds) {
+        Ok(duration) if zero == Zero::Disables || !duration.is_zero() => Ok(duration),
+        _ => Err(ValidationError::field(flag)
+            .value(seconds.to_string())
+            .reason(match zero {
+                Zero::Invalid => "must be finite and positive",
+                Zero::Disables => "must be finite and zero or positive",
+            })),
+    }
+}
 
 impl Output {
+    /// The destination for `--output-dir` and `--output-mode`.
+    pub fn mode(&self) -> Result<OutputMode, ValidationError> {
+        match (self.mode, self.dir.clone()) {
+            (Some(cli::OutputMode::SideBySide) | None, None) => Ok(OutputMode::SideBySide),
+            (Some(cli::OutputMode::TreeToTree) | None, Some(dir)) => {
+                Ok(OutputMode::TreeToTree(dir))
+            }
+            (Some(cli::OutputMode::Flat), Some(dir)) => Ok(OutputMode::Flat(dir)),
+            (Some(cli::OutputMode::SideBySide), Some(_)) => {
+                Err(ValidationError::field("--output-mode")
+                    .value("side-by-side")
+                    .reason("cannot be used with --output-dir"))
+            }
+            (Some(mode @ (cli::OutputMode::TreeToTree | cli::OutputMode::Flat)), None) => {
+                Err(ValidationError::field("--output-mode")
+                    .value(if mode == cli::OutputMode::Flat {
+                        "flat"
+                    } else {
+                        "tree-to-tree"
+                    })
+                    .reason("tree-to-tree and flat require --output-dir"))
+            }
+        }
+    }
+
     /// The output writer for these options.
-    pub fn writer(&self) -> anyhow::Result<OutputWriter> {
+    pub fn writer(&self) -> Result<OutputWriter, ValidationError> {
         Ok(OutputWriter::new()
             .formats(self.formats()?)
             .min_words(self.min_words)
@@ -27,7 +272,7 @@ impl Output {
     }
 
     /// Selected formats in order, without duplicates, plus word-level ones with `--words`.
-    pub(super) fn formats(&self) -> anyhow::Result<Vec<BuiltinFormat>> {
+    pub(super) fn formats(&self) -> Result<Vec<BuiltinFormat>, ValidationError> {
         let mut formats: Vec<BuiltinFormat> = Vec::new();
         for choice in &self.formats {
             match choice {
@@ -39,68 +284,18 @@ impl Output {
             let word_formats: Vec<BuiltinFormat> =
                 formats.iter().filter_map(|f| f.words()).collect();
             if word_formats.is_empty() {
-                bail!("--words needs at least one of srt, vtt, csv, tsv or json in --format");
+                return Err(ValidationError::field("--words")
+                    .reason("needs at least one of srt, vtt, csv, tsv or json in --format"));
             }
             formats.extend(word_formats);
         }
         let mut seen = HashSet::new();
         formats.retain(|format| seen.insert(*format));
         if formats.is_empty() {
-            bail!("no output formats given");
+            return Err(ValidationError::field("--format").reason("no output formats given"));
         }
         Ok(formats)
     }
-}
-
-impl Segmentation {
-    /// The segmenter selected by `--vad`.
-    pub fn segmenter(&self) -> anyhow::Result<Arc<dyn Segmenter>> {
-        if !(self.max_chunk.is_finite() && self.max_chunk > 0.0) {
-            bail!("--max-chunk must be positive");
-        }
-        if !(self.pad.is_finite() && self.pad >= 0.0) {
-            bail!("--pad must be zero or positive");
-        }
-        if !(self.resend_gaps.is_finite() && self.resend_gaps >= 0.0) {
-            bail!("--resend-gaps must be zero or positive");
-        }
-        Ok(match self.vad {
-            cli::Vad::Silero => Arc::new(SileroSegmenter::new(SileroConfig {
-                threshold: self.vad_threshold,
-                min_speech: Duration::from_millis(self.min_speech_ms.into()),
-                max_speech: seconds(self.max_chunk),
-                min_silence: Duration::from_millis(self.min_silence_ms.into()),
-                speech_pad: Duration::from_millis(self.speech_pad_ms.into()),
-            })?),
-            cli::Vad::None => Arc::new(FixedWindows::new(seconds(self.max_chunk))?),
-        })
-    }
-
-    /// Longest audio sent per request, padding included, in seconds.
-    pub fn request_seconds(&self) -> f64 {
-        self.max_chunk + 2.0 * self.pad
-    }
-
-    /// Chunking options matching the segmenter.
-    pub fn chunk_options(&self) -> ChunkOptions {
-        ChunkOptions {
-            max_chunk: seconds(self.max_chunk),
-            merge: self.merge,
-            padding: (self.pad > 0.0).then(|| match self.pad_noise {
-                Some(dbfs) => Padding::white_noise(seconds(self.pad), dbfs),
-                None => Padding::silence(seconds(self.pad)),
-            }),
-            on_error: self.on_chunk_error.into(),
-            max_in_flight: None,
-            resend_gaps: (self.resend_gaps > 0.0).then(|| seconds(self.resend_gaps)),
-        }
-    }
-}
-
-/// `value` seconds as a duration, saturating when too long to represent. Negative and NaN
-/// values are rejected while parsing.
-fn seconds(value: f64) -> Duration {
-    Duration::try_from_secs_f64(value).unwrap_or(Duration::MAX)
 }
 
 impl From<cli::OnChunkError> for tafrigh::OnChunkError {
@@ -112,28 +307,54 @@ impl From<cli::OnChunkError> for tafrigh::OnChunkError {
     }
 }
 
-impl Wit {
-    /// The recognizer configuration for requests of up to `request_seconds` of audio.
-    pub fn config(&self, request_seconds: f64) -> WitConfig {
+impl cli::Wit {
+    /// The recognizer configuration for requests of up to `request` of audio.
+    fn config(&self, request: Duration) -> Result<WitConfig, ValidationError> {
+        let rate = self.requests_per_second;
+        if !(rate.is_finite() && rate > 0.0) {
+            return Err(ValidationError::field("--wit-rps")
+                .value(rate.to_string())
+                .reason("must be finite and positive"));
+        }
+        if self.tokens.iter().all(|token| token.trim().is_empty()) {
+            return Err(ValidationError::field("--wit-token")
+                .reason("at least one nonblank token is required"));
+        }
+        let at_least_one = |flag| {
+            ValidationError::field(flag)
+                .value("0")
+                .reason("must be at least 1")
+        };
+        if self.attempts == 0 {
+            return Err(at_least_one("--wit-attempts"));
+        }
+        if self.concurrency == Some(0) {
+            return Err(at_least_one("--wit-concurrency"));
+        }
         let mut config = WitConfig::new(self.tokens.iter().cloned());
         config.language.clone_from(&self.language);
         config.endpoint = self.endpoint.into();
         config.api_url.clone_from(&self.api_url);
         config.api_version.clone_from(&self.api_version);
-        config.requests_per_second = self.requests_per_second;
+        config.requests_per_second = rate;
         config.max_in_flight_per_token = self
             .concurrency
-            .unwrap_or_else(|| default_concurrency(self.requests_per_second, request_seconds));
+            .unwrap_or_else(|| default_concurrency(rate, request));
         config.max_attempts = self.attempts;
-        config.max_audio = self.max_audio.map(seconds);
-        config
+        config.max_audio = self
+            .max_audio
+            .map(|seconds| duration("--wit-max-audio", seconds, Zero::Invalid))
+            .transpose()?;
+        Ok(config)
     }
 }
 
 /// Requests per token needed to start `rate` requests a second when each takes about its
 /// audio's length plus 2s (upload and latency).
-fn default_concurrency(rate: f64, request_seconds: f64) -> usize {
-    (rate * (request_seconds + 2.0)).ceil().clamp(1.0, 64.0) as usize
+fn default_concurrency(rate: f64, request: Duration) -> usize {
+    (rate * (request.as_secs_f64() + 2.0))
+        .ceil()
+        .clamp(1.0, 64.0) as usize
 }
 
 impl From<cli::WitEndpoint> for Endpoint {
@@ -152,15 +373,17 @@ impl Tools {
     }
 
     /// The yt-dlp source, downloading into `--download-dir` or `output_dir`.
-    pub fn ytdlp(&self, output_dir: &Path) -> anyhow::Result<YtDlp> {
+    pub fn ytdlp(&self, output_dir: &Path) -> Result<YtDlp, ValidationError> {
         let download_dir = self.download_dir.as_deref().unwrap_or(output_dir);
         let ytdlp = YtDlp::new(download_dir)
             .program(&self.yt_dlp)
             .save_metadata(self.save_metadata);
-        Ok(match &self.yt_dlp_args {
-            Some(extra) => ytdlp.args(shell_words::split(extra).context("parsing --yt-dlp-args")?),
-            None => ytdlp,
-        })
+        let Some(extra) = &self.yt_dlp_args else {
+            return Ok(ytdlp);
+        };
+        let extra = shell_words::split(extra)
+            .map_err(|error| ValidationError::field("--yt-dlp-args").reason(error.to_string()))?;
+        Ok(ytdlp.args(extra))
     }
 }
 
@@ -221,6 +444,8 @@ fn describe_unavailable(err: &tafrigh::Error, note: &str, install: &str, flag: &
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use tafrigh::output::Format;
 
     use crate::cli::{Cli, Command};
@@ -238,7 +463,8 @@ mod tests {
         };
         Ok(parsed
             .output
-            .formats()?
+            .formats()
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?
             .iter()
             .map(|f| f.extension().to_owned())
             .collect())
@@ -260,10 +486,12 @@ mod tests {
 
     #[test]
     fn concurrency_keeps_up_with_the_request_rate() {
-        assert_eq!(super::default_concurrency(1.0, 16.0), 18);
-        assert_eq!(super::default_concurrency(0.5, 5.0), 4);
-        assert_eq!(super::default_concurrency(1e-9, 5.0), 1);
-        assert_eq!(super::default_concurrency(100.0, 60.0), 64);
+        let concurrency =
+            |rate, seconds| super::default_concurrency(rate, Duration::from_secs(seconds));
+        assert_eq!(concurrency(1.0, 16), 18);
+        assert_eq!(concurrency(0.5, 5), 4);
+        assert_eq!(concurrency(1e-9, 5), 1);
+        assert_eq!(concurrency(100.0, 60), 64);
     }
 
     #[test]

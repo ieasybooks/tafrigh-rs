@@ -8,9 +8,11 @@ use usage_rs::embedded::{Exit, Outcome};
 use usage_rs::install::{Env, Loading, OnForeign, Wrote};
 
 use crate::cli::{Cli, Completions};
+use crate::setup::Plan;
 
-/// Expand reusable argument files and let Usage render its own help and diagnostics.
-pub fn parse() -> Result<Cli, ExitCode> {
+/// Expand reusable argument files and let Usage render its own help and diagnostics, including
+/// for arguments that fail validation.
+pub fn parse() -> Result<Plan, ExitCode> {
     let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
     // Completion words are shell input, not arguments to execute. In particular, never
     // expand @files from a partial command line passed by the completion protocol.
@@ -28,8 +30,8 @@ pub fn parse() -> Result<Cli, ExitCode> {
             code: 2,
         })
     })?;
-    match Cli::embedded_outcome(&argv) {
-        Outcome::Parsed(cli) => Ok(cli),
+    match Cli::embedded_outcome_into(&argv) {
+        Outcome::Parsed(plan) => Ok(plan),
         Outcome::Exit(exit) => Err(print_exit(&exit)),
     }
 }
