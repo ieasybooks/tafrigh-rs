@@ -717,14 +717,8 @@ enum Outcome {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::io::Write;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
-    #[cfg(unix)]
-    use std::sync::{Arc as SyncArc, Mutex};
-    #[cfg(unix)]
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
     use std::time::Duration;
 
     use super::*;
@@ -757,6 +751,8 @@ mod tests {
             media: &Path,
             _progress: &dyn Progress<TranscribeEvent>,
         ) -> Result<Vec<Segment>> {
+            use std::io::Write;
+
             let id = media.file_stem().and_then(|stem| stem.to_str()).unwrap();
             let mut log = std::fs::OpenOptions::new()
                 .create(true)
@@ -778,8 +774,8 @@ mod tests {
 
     #[tokio::test]
     async fn missing_tools_stop_the_run_while_other_errors_fail_the_item() {
-        let dir = std::env::temp_dir().join(format!("tafrigh-pipeline-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
         let media = dir.join("a.mp3");
         std::fs::write(&media, b"").unwrap();
         let output = OutputWriter::new(dir.join("out"));
@@ -813,21 +809,15 @@ mod tests {
             matches!(err, Error::ToolUnavailable { tool: "ffmpeg", .. }),
             "{err:?}"
         );
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn prefetches_the_next_remote_download_during_transcription() {
-        let dir = std::env::temp_dir().join(format!(
-            "tafrigh-prefetch-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
         let log = dir.join("events.log");
         let script = dir.join("yt-dlp.sh");
         let script_body = r#"#!/bin/sh
@@ -869,11 +859,8 @@ printf '%s\n' "$path"
             .output(output)
             .ytdlp(YtDlp::new(dir.join("downloads")).program(&script))
             .build();
-        let events = SyncArc::new(Mutex::new(Vec::new()));
-        let collect = {
-            let events = events.clone();
-            move |event: Event| events.lock().unwrap().push(event)
-        };
+        let events = Mutex::new(Vec::new());
+        let collect = |event: Event| events.lock().unwrap().push(event);
         let report = tafrigh
             .run(
                 [Input::Url("https://example.com/playlist".into())],
@@ -916,16 +903,15 @@ printf '%s\n' "$path"
                 ("finished", "item2".into()),
             ]
         );
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Reports that all audio was sent, then takes as many milliseconds as the number after
     /// `_` in the file name to finish.
     #[derive(Default)]
     struct Draining {
-        log: std::sync::Mutex<Vec<String>>,
-        active: std::sync::atomic::AtomicUsize,
-        peak: std::sync::atomic::AtomicUsize,
+        log: Mutex<Vec<String>>,
+        active: AtomicUsize,
+        peak: AtomicUsize,
     }
 
     #[async_trait::async_trait]
@@ -935,14 +921,13 @@ printf '%s\n' "$path"
             media: &Path,
             progress: &dyn Progress<TranscribeEvent>,
         ) -> Result<Vec<Segment>> {
-            use std::sync::atomic::Ordering::SeqCst;
             let id = media.file_stem().unwrap().to_string_lossy().into_owned();
             let millis: u64 = id.split('_').nth(1).unwrap().parse().unwrap();
             let now = self.active.fetch_add(1, SeqCst) + 1;
             self.peak.fetch_max(now, SeqCst);
             self.log.lock().unwrap().push(format!("start {id}"));
             progress.report(TranscribeEvent::Segmented { chunks: 1 });
-            tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
+            tokio::time::sleep(Duration::from_millis(millis)).await;
             self.log.lock().unwrap().push(format!("end {id}"));
             self.active.fetch_sub(1, SeqCst);
             Ok(vec![Segment::new(0.0, 1.0, &id)])
@@ -951,8 +936,8 @@ printf '%s\n' "$path"
 
     #[tokio::test]
     async fn next_items_start_while_one_waits_for_its_last_answers() {
-        let dir = std::env::temp_dir().join(format!("tafrigh-overlap-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
         let inputs: Vec<Input> = ["a_300", "b_50", "c_50", "d_50"]
             .into_iter()
             .map(|name| {
@@ -961,7 +946,7 @@ printf '%s\n' "$path"
                 Input::Path(path)
             })
             .collect();
-        let transcriber = std::sync::Arc::new(Draining::default());
+        let transcriber = Arc::new(Draining::default());
         let tafrigh = Tafrigh::builder(transcriber.clone())
             .output(
                 OutputWriter::new(dir.join("out"))
@@ -969,7 +954,7 @@ printf '%s\n' "$path"
                         as Arc<dyn crate::output::Format>]),
             )
             .build();
-        let finished = std::sync::Mutex::new(Vec::new());
+        let finished = Mutex::new(Vec::new());
         let collect = |event: Event| {
             if let Event::ItemFinished { item, .. } = event {
                 finished.lock().unwrap().push(item.id.to_string());
@@ -992,22 +977,19 @@ printf '%s\n' "$path"
                 "end a_300"
             ]
         );
-        assert_eq!(
-            transcriber.peak.load(std::sync::atomic::Ordering::SeqCst),
-            2
-        );
+        assert_eq!(transcriber.peak.load(SeqCst), 2);
         // Results still come in input order.
         let order = ["a_300", "b_50", "c_50", "d_50"];
         assert_eq!(*finished.lock().unwrap(), order);
         let ids: Vec<&str> = report.items.iter().map(|item| &*item.item.id).collect();
         assert_eq!(ids, order);
         assert!(dir.join("out/d_50.txt").exists());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]
     async fn skipped_items_keep_their_place_and_are_left_alone() {
-        let dir = std::env::temp_dir().join(format!("tafrigh-skip-{}", std::process::id()));
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
         let out = dir.join("out");
         std::fs::create_dir_all(&out).unwrap();
         let names = ["a_200", "b_10", "c_10", "d_10"];
@@ -1023,14 +1005,14 @@ printf '%s\n' "$path"
                 Input::Path(path)
             })
             .collect();
-        let transcriber = std::sync::Arc::new(Draining::default());
+        let transcriber = Arc::new(Draining::default());
         let tafrigh = Tafrigh::builder(transcriber.clone())
             .output(OutputWriter::new(&out).formats([
                 Arc::new(crate::output::BuiltinFormat::Txt) as Arc<dyn crate::output::Format>
             ]))
             .skip_existing(true)
             .build();
-        let outcomes = std::sync::Mutex::new(Vec::new());
+        let outcomes = Mutex::new(Vec::new());
         let collect = |event: Event| match event {
             Event::ItemFinished { item, .. } => {
                 outcomes
@@ -1081,6 +1063,5 @@ printf '%s\n' "$path"
             "earlier run"
         );
         assert!(out.join("c_10.txt").exists());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

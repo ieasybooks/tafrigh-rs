@@ -274,11 +274,8 @@ mod tests {
     fn probe_timeout_returns_without_waiting_for_ffprobe() {
         use std::os::unix::fs::PermissionsExt;
 
-        let path = std::env::temp_dir().join(format!(
-            "tafrigh-fake-ffprobe-{}-{}.sh",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("ffprobe.sh");
         std::fs::write(&path, b"#!/bin/sh\nexec sleep 10\n").unwrap();
         let mut permissions = std::fs::metadata(&path).unwrap().permissions();
         permissions.set_mode(0o755);
@@ -288,6 +285,5 @@ mod tests {
         let started = Instant::now();
         assert_eq!(decoder.probe_duration(Path::new("audio.mp3")), None);
         assert!(started.elapsed() < Duration::from_secs(2));
-        std::fs::remove_file(path).unwrap();
     }
 }

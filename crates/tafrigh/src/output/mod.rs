@@ -170,7 +170,8 @@ mod tests {
 
     #[test]
     fn writes_every_target_atomically() {
-        let dir = std::env::temp_dir().join(format!("tafrigh-output-{}", std::process::id()));
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("out");
         let writer = OutputWriter::new(&dir)
             .formats([Arc::new(BuiltinFormat::Txt) as Arc<dyn Format>])
             .min_words(2)
@@ -197,6 +198,5 @@ mod tests {
         );
         assert!(writer.exists("x"));
         assert!(!dir.join("x.txt.tmp").exists());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
