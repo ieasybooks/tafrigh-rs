@@ -32,28 +32,30 @@ fn media(root: &Path, relative: &str) -> PathBuf {
     path
 }
 
-fn writer(dir: &Path) -> OutputWriter {
-    OutputWriter::new(dir)
+fn writer() -> OutputWriter {
+    OutputWriter::new()
         .formats([BuiltinFormat::Srt, BuiltinFormat::WordsSrt])
         .keep_uncompacted(true)
 }
 
 #[tokio::test]
 async fn layouts_route_all_variants_and_skip_only_complete_outputs() {
-    for mode in [
-        OutputMode::SideBySide,
+    let modes: [fn(PathBuf) -> OutputMode; 3] = [
+        |_| OutputMode::SideBySide,
         OutputMode::TreeToTree,
         OutputMode::Flat,
-    ] {
+    ];
+    for mode in modes {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         media(&root, "in/a/talk.mp3");
         media(&root, "in/b/talk.mp3");
+        let mode = mode(root.join("out"));
         let transcriber = Arc::new(CountingTranscriber::default());
         let tafrigh = Tafrigh::builder(transcriber.clone())
             .recursive(true)
-            .output(writer(&root.join("out")))
-            .output_mode(mode)
+            .output(writer())
+            .output_mode(mode.clone())
             .skip_existing(true)
             .build();
         let inputs = [Input::Path(root.join("in"))];
@@ -63,8 +65,8 @@ async fn layouts_route_all_variants_and_skip_only_complete_outputs() {
         assert_ne!(report.items[0].item.id, report.items[1].item.id);
         let names = match mode {
             OutputMode::SideBySide => ["in/a/talk", "in/b/talk"],
-            OutputMode::TreeToTree => ["out/a/talk", "out/b/talk"],
-            OutputMode::Flat => ["out/talk", "out/talk-2"],
+            OutputMode::TreeToTree(_) => ["out/a/talk", "out/b/talk"],
+            OutputMode::Flat(_) => ["out/talk", "out/talk-2"],
         };
         for (item, name) in report.items.iter().zip(names) {
             let ItemStatus::Transcribed { outputs, .. } = &item.status else {
@@ -111,8 +113,8 @@ async fn tree_separates_roots_and_puts_individual_files_at_the_top() {
     media(&root, "second/lectures/course/talk.mp3");
     let single = media(&root, "single/talk.mp3");
     let report = Tafrigh::builder(CountingTranscriber::default())
-        .output(writer(&root.join("out")))
-        .output_mode(OutputMode::TreeToTree)
+        .output(writer())
+        .output_mode(OutputMode::TreeToTree(root.join("out")))
         .recursive(true)
         .sample(3)
         .build()
@@ -167,17 +169,19 @@ printf '%s\n' "$dir/actual-name.wav"
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let local = media(&root, "in/remote.mp3");
-    for mode in [
-        OutputMode::SideBySide,
+    let modes: [fn(PathBuf) -> OutputMode; 3] = [
+        |_| OutputMode::SideBySide,
         OutputMode::TreeToTree,
         OutputMode::Flat,
-    ] {
-        let out = root.join(format!("{mode:?}"));
+    ];
+    for (index, mode) in modes.into_iter().enumerate() {
+        let out = root.join(format!("mode-{index}"));
         let downloads = out.join("downloads");
+        let mode = mode(out.clone());
         let transcriber = Arc::new(CountingTranscriber::default());
         let tafrigh = Tafrigh::builder(transcriber.clone())
-            .output(writer(&out))
-            .output_mode(mode)
+            .output(writer())
+            .output_mode(mode.clone())
             .ytdlp(YtDlp::new(&downloads).program(&script))
             .skip_existing(true)
             .build();
@@ -207,7 +211,8 @@ printf '%s\n' "$dir/actual-name.wav"
     // A colliding progress/output name must not change yt-dlp's cache lookup ID.
     media(&root, "cache/remote.wav");
     let report = Tafrigh::builder(CountingTranscriber::default())
-        .output(writer(&root.join("cached-output")))
+        .output(writer())
+        .output_mode(OutputMode::Flat(root.join("cached-output")))
         .ytdlp(YtDlp::new(root.join("cache")).program(&script))
         .build()
         .run(

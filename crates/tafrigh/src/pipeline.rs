@@ -1,7 +1,7 @@
 //! Running a transcriber over user inputs and writing transcripts.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
@@ -21,12 +21,12 @@ use crate::{CaptionProvider, Error, Result, Segment, Transcriber};
 ///
 /// ```no_run
 /// # async fn demo(transcriber: tafrigh::ChunkedTranscriber) -> tafrigh::Result<()> {
-/// use tafrigh::output::OutputWriter;
+/// use tafrigh::output::OutputMode;
 /// use tafrigh::source::Input;
 /// use tafrigh::{NoProgress, Tafrigh};
 ///
 /// let tafrigh = Tafrigh::builder(transcriber)
-///     .output(OutputWriter::new("transcripts"))
+///     .output_mode(OutputMode::Flat("transcripts".into()))
 ///     .skip_existing(true)
 ///     .build();
 /// let report = tafrigh
@@ -91,16 +91,15 @@ impl Drop for PrefetchedDownload {
 }
 
 impl TafrighBuilder {
-    /// Where and how transcripts are written. Defaults to all formats in the current directory.
+    /// Which transcript files are written. Defaults to [`OutputWriter::new`].
     #[must_use]
     pub fn output(mut self, output: OutputWriter) -> Self {
         self.output = output;
         self
     }
 
-    /// How transcripts are placed. Defaults to [`OutputMode::Flat`].
-    /// In side-by-side mode the writer's directory is ignored, and `sample.csv` goes in
-    /// the current directory. Tree mode separates multiple directory inputs by root name.
+    /// Where transcripts go. Defaults to flat output in the current directory. In side-by-side
+    /// mode, `sample.csv` goes in the current directory.
     #[must_use]
     pub fn output_mode(mut self, mode: OutputMode) -> Self {
         self.output_mode = mode;
@@ -139,13 +138,9 @@ impl TafrighBuilder {
 
     /// Finishes configuration.
     pub fn build(self) -> Tafrigh {
-        let ytdlp = self.ytdlp.unwrap_or_else(|| {
-            YtDlp::new(if self.output_mode == OutputMode::SideBySide {
-                std::path::Path::new(".")
-            } else {
-                self.output.dir()
-            })
-        });
+        let ytdlp = self
+            .ytdlp
+            .unwrap_or_else(|| YtDlp::new(self.output_mode.dir().unwrap_or(Path::new("."))));
         Tafrigh {
             backend: self.backend,
             output: self.output,
@@ -228,7 +223,7 @@ impl Tafrigh {
     fn with_backend(backend: Backend) -> TafrighBuilder {
         TafrighBuilder {
             backend,
-            output: OutputWriter::new("."),
+            output: OutputWriter::new(),
             output_mode: OutputMode::default(),
             ytdlp: None,
             recursive: false,
@@ -249,8 +244,7 @@ impl Tafrigh {
             Input::Path(path) => {
                 let path = path.clone();
                 let recursive = self.recursive;
-                let excluded = (self.output_mode != OutputMode::SideBySide)
-                    .then(|| self.output.dir().to_owned());
+                let excluded = self.output_mode.dir().map(Path::to_owned);
                 task_result(
                     tokio::task::spawn_blocking(move || {
                         discover_local(&path, recursive, excluded.as_deref())
@@ -351,7 +345,7 @@ impl Tafrigh {
         events: &dyn Progress<Event>,
         report: &mut RunReport,
     ) -> Result<Queue> {
-        let mut layout = Layout::new(self.output_mode, self.output.clone(), inputs);
+        let mut layout = Layout::new(self.output_mode.clone(), self.output.clone(), inputs);
         let mut resolved = Vec::new();
         for (index, input) in inputs.iter().enumerate() {
             events.report(Event::InputResolving {
@@ -452,7 +446,7 @@ impl Tafrigh {
         // Items that cannot start finish at once, without taking a transcription slot.
         let outcome = match destination {
             Destination::Unusable(error) => Outcome::Failed(error),
-            Destination::Planned(target) if self.skip_existing && target.exists() => {
+            Destination::Planned(target) if self.skip_existing && target.exists(&self.output) => {
                 Outcome::Skipped
             }
             destination => {
@@ -512,7 +506,7 @@ impl Tafrigh {
                     .await?;
                 let target = layout.lock().unwrap().downloaded(&path)?;
                 item.media = Media::File(path);
-                if self.skip_existing && target.exists() {
+                if self.skip_existing && target.exists(&self.output) {
                     return Ok(Outcome::Skipped);
                 }
                 target
@@ -531,7 +525,7 @@ impl Tafrigh {
 
     fn prefetch_download(&self, next: &Queued) -> Option<PrefetchedDownload> {
         let needed = match &next.destination {
-            Destination::Planned(target) => !(self.skip_existing && target.exists()),
+            Destination::Planned(target) => !(self.skip_existing && target.exists(&self.output)),
             Destination::AfterDownload => true,
             Destination::Unusable(_) => false,
         };
@@ -662,7 +656,7 @@ impl Tafrigh {
             media,
             segments,
         } = transcript;
-        if target.writer.needs_words()
+        if self.output.needs_words()
             && !segments.is_empty()
             && segments.iter().all(|s| s.words.is_empty())
         {
@@ -671,7 +665,7 @@ impl Tafrigh {
                 info.id
             );
         }
-        let written = target.write(&segments)?;
+        let written = self.output.write(&target.dir, &target.name, &segments)?;
         if self.sample > 0 {
             for segment in written.segments {
                 samples.push(SampleRow {
@@ -754,12 +748,12 @@ struct Transcript {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
     use std::time::Duration;
 
     use super::*;
     use crate::NoProgress;
+    use crate::output::BuiltinFormat;
 
     /// A transcriber that always fails with the error its function builds.
     struct Failing(fn() -> Error);
@@ -815,13 +809,13 @@ mod tests {
         let dir = temp.path();
         let media = dir.join("a.mp3");
         std::fs::write(&media, b"").unwrap();
-        let output = OutputWriter::new(dir.join("out"));
+        let output = OutputMode::Flat(dir.join("out"));
 
         let broken_file = Tafrigh::builder(Failing(|| Error::Decode {
             path: "a.mp3".into(),
             message: "Invalid data found when processing input".into(),
         }))
-        .output(output.clone())
+        .output_mode(output.clone())
         .build();
         let report = broken_file
             .run([Input::Path(media.clone())], &NoProgress)
@@ -836,7 +830,7 @@ mod tests {
                 std::io::ErrorKind::NotFound.into(),
             )
         }))
-        .output(output)
+        .output_mode(output)
         .build();
         let err = no_ffmpeg
             .run([Input::Path(media)], &NoProgress)
@@ -887,11 +881,10 @@ printf '%s\n' "$path"
         permissions.set_mode(0o755);
         std::fs::set_permissions(&script, permissions).unwrap();
 
-        let output =
-            OutputWriter::new(dir.join("outputs")).formats([crate::output::BuiltinFormat::Txt]);
         let transcriber = RecordingTranscriber { log: log.clone() };
         let tafrigh = Tafrigh::builder(transcriber)
-            .output(output)
+            .output(OutputWriter::new().formats([BuiltinFormat::Txt]))
+            .output_mode(OutputMode::Flat(dir.join("outputs")))
             .ytdlp(YtDlp::new(dir.join("downloads")).program(&script))
             .build();
         let events = Mutex::new(Vec::new());
@@ -983,7 +976,8 @@ printf '%s\n' "$path"
             .collect();
         let transcriber = Arc::new(Draining::default());
         let tafrigh = Tafrigh::builder(transcriber.clone())
-            .output(OutputWriter::new(dir.join("out")).formats([crate::output::BuiltinFormat::Txt]))
+            .output(OutputWriter::new().formats([BuiltinFormat::Txt]))
+            .output_mode(OutputMode::Flat(dir.join("out")))
             .build();
         let finished = Mutex::new(Vec::new());
         let collect = |event: Event| {
@@ -1038,7 +1032,8 @@ printf '%s\n' "$path"
             .collect();
         let transcriber = Arc::new(Draining::default());
         let tafrigh = Tafrigh::builder(transcriber.clone())
-            .output(OutputWriter::new(&out).formats([crate::output::BuiltinFormat::Txt]))
+            .output(OutputWriter::new().formats([BuiltinFormat::Txt]))
+            .output_mode(OutputMode::Flat(out.clone()))
             .skip_existing(true)
             .build();
         let outcomes = Mutex::new(Vec::new());

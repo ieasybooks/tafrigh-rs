@@ -222,22 +222,22 @@ impl Output {
     pub fn mode(&self) -> Result<tafrigh::output::OutputMode, ValidationError> {
         use tafrigh::output::OutputMode as Mode;
 
-        match (self.mode, self.dir.is_some()) {
-            (Some(OutputMode::SideBySide), true) => Err(ValidationError::field("--output-mode")
+        match (self.mode, self.dir.clone()) {
+            (Some(OutputMode::SideBySide) | None, None) => Ok(Mode::SideBySide),
+            (Some(OutputMode::TreeToTree) | None, Some(dir)) => Ok(Mode::TreeToTree(dir)),
+            (Some(OutputMode::Flat), Some(dir)) => Ok(Mode::Flat(dir)),
+            (Some(OutputMode::SideBySide), Some(_)) => Err(ValidationError::field("--output-mode")
                 .value("side-by-side")
                 .reason("cannot be used with --output-dir")),
-            (Some(OutputMode::TreeToTree | OutputMode::Flat), false) => {
+            (Some(mode @ (OutputMode::TreeToTree | OutputMode::Flat)), None) => {
                 Err(ValidationError::field("--output-mode")
-                    .value(if self.mode == Some(OutputMode::Flat) {
+                    .value(if mode == OutputMode::Flat {
                         "flat"
                     } else {
                         "tree-to-tree"
                     })
                     .reason("tree-to-tree and flat require --output-dir"))
             }
-            (Some(OutputMode::SideBySide) | None, false) => Ok(Mode::SideBySide),
-            (Some(OutputMode::TreeToTree) | None, true) => Ok(Mode::TreeToTree),
-            (Some(OutputMode::Flat), true) => Ok(Mode::Flat),
         }
     }
 }
@@ -638,7 +638,7 @@ mod tests {
         assert_eq!(args.output.dir, Some("last".into()));
         assert_eq!(
             args.output.mode().unwrap(),
-            tafrigh::output::OutputMode::TreeToTree
+            tafrigh::output::OutputMode::TreeToTree("last".into())
         );
         assert!(!args.segmentation.merge);
         assert!(!args.recursive);

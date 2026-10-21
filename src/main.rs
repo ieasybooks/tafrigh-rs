@@ -5,6 +5,7 @@ mod command;
 mod setup;
 mod ui;
 
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -84,7 +85,9 @@ async fn run(args: Args, output_mode: OutputMode, ui: &Ui) -> anyhow::Result<Exi
         .collect();
     // Before anything touches the network, so a missing program fails fast.
     let output = args.output.writer()?;
-    let ytdlp = args.tools.ytdlp(output.dir())?;
+    let ytdlp = args
+        .tools
+        .ytdlp(output_mode.dir().unwrap_or(Path::new(".")))?;
     let builder = match args.transcriber {
         cli::Transcriber::Wit => {
             let decoder = args.tools.decoder();

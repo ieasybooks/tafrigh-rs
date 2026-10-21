@@ -1,5 +1,6 @@
 //! Pipeline behavior for external caption providers.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -40,14 +41,16 @@ impl CaptionProvider for RecordedCaptions {
 
 #[tokio::test]
 async fn external_caption_providers_share_layouts_skipping_and_item_failures() {
-    for mode in [
-        OutputMode::SideBySide,
+    let modes: [fn(PathBuf) -> OutputMode; 3] = [
+        |_| OutputMode::SideBySide,
         OutputMode::Flat,
         OutputMode::TreeToTree,
-    ] {
+    ];
+    for mode in modes {
         let directory = tempfile::tempdir().unwrap();
         let downloads = directory.path().join("downloads");
         let outputs = directory.path().join("outputs");
+        let mode = mode(outputs.clone());
         let expected = if mode == OutputMode::SideBySide {
             &downloads
         } else {
@@ -58,7 +61,7 @@ async fn external_caption_providers_share_layouts_skipping_and_item_failures() {
         let provider = Arc::new(RecordedCaptions::default());
         let shared: Arc<dyn CaptionProvider> = provider.clone();
         let pipeline = Tafrigh::captions(shared)
-            .output(OutputWriter::new(&outputs).formats([BuiltinFormat::Txt]))
+            .output(OutputWriter::new().formats([BuiltinFormat::Txt]))
             .output_mode(mode)
             .ytdlp(YtDlp::new(&downloads).program(directory.path().join("no-yt-dlp")))
             .skip_existing(true)
