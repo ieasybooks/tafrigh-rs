@@ -9,11 +9,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub use compact::compact;
-pub use format::{BuiltinFormat, Format, format_timestamp};
+use compact::compact;
+pub use format::{BuiltinFormat, Format};
 pub use layout::OutputMode;
 pub(crate) use layout::{Layout, Target, unique_name};
-pub use sample::{SampleReservoir, SampleRow, write_sample};
+pub(crate) use sample::{SampleReservoir, SampleRow, write_sample};
 
 use crate::{Error, Result, Segment};
 
@@ -36,12 +36,15 @@ pub struct Written {
 }
 
 impl OutputWriter {
-    /// All segment-level built-in formats ([`BuiltinFormat::ALL`]), compaction to at least one
-    /// word per segment.
+    /// All segment-level built-in formats ([`BuiltinFormat::SEGMENT_LEVEL`]), compaction to at
+    /// least one word per segment.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: dir.into(),
-            formats: BuiltinFormat::ALL.into_iter().map(Into::into).collect(),
+            formats: BuiltinFormat::SEGMENT_LEVEL
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             min_words: 1,
             keep_uncompacted: false,
         }

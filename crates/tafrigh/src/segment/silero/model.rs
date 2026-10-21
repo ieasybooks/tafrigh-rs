@@ -12,10 +12,10 @@ use super::{CONTEXT_SAMPLES, WINDOW_SAMPLES};
 use crate::{Error, Result};
 
 /// The bundled model (MIT, Silero Team; export from SYSTRAN/faster-whisper).
-pub static MODEL_ONNX: &[u8] = include_bytes!("../../../assets/silero_vad_v6.onnx");
+static MODEL_ONNX: &[u8] = include_bytes!("../../../assets/silero_vad_v6.onnx");
 
 /// Frames per network call.
-pub const BATCH_FRAMES: usize = 256;
+pub(super) const BATCH_FRAMES: usize = 256;
 const STATE: usize = 128;
 const ROW: usize = WINDOW_SAMPLES + CONTEXT_SAMPLES;
 
@@ -55,7 +55,7 @@ impl SileroModel {
     }
 
     /// Starts a fresh stream (zeroed recurrent state) for one recording.
-    pub fn stream(&self) -> Result<ProbabilityStream> {
+    pub(super) fn stream(&self) -> Result<ProbabilityStream> {
         let zero =
             || Tensor::zero::<f32>(&[1, 1, STATE]).map_err(|err| Error::Vad(err.to_string()));
         Ok(ProbabilityStream {
@@ -71,7 +71,7 @@ impl SileroModel {
 }
 
 /// Turns a stream of samples into one speech probability per 512-sample frame.
-pub struct ProbabilityStream {
+pub(super) struct ProbabilityStream {
     model: SileroModel,
     h: Tensor,
     c: Tensor,

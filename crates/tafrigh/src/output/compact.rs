@@ -2,7 +2,7 @@ use crate::Segment;
 
 /// Merges segments with fewer than `min_words` words into the segments that follow them,
 /// until each has at least `min_words` (the last one may stay short). `0` returns a copy.
-pub fn compact(segments: &[Segment], min_words: usize) -> Vec<Segment> {
+pub(super) fn compact(segments: &[Segment], min_words: usize) -> Vec<Segment> {
     if min_words == 0 {
         return segments.to_vec();
     }

@@ -132,7 +132,7 @@ impl SegmentationSession for FixedWindowsSession {
 /// Merging reduces the number of recognizer requests and gives each request more context, at
 /// the cost of coarser segments. Silence between merged spans is kept.
 #[derive(Debug, Clone)]
-pub struct Merger {
+pub(crate) struct Merger {
     max_len: usize,
     current: Option<SpeechSpan>,
 }

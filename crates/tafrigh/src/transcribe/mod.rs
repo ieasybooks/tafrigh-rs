@@ -79,17 +79,6 @@ impl Recognition {
             }],
         }
     }
-
-    /// All utterance texts joined with spaces.
-    pub fn joined_text(&self) -> String {
-        let parts: Vec<&str> = self
-            .utterances
-            .iter()
-            .map(|u| u.text.trim())
-            .filter(|t| !t.is_empty())
-            .collect();
-        parts.join(" ")
-    }
 }
 
 /// One stretch of recognized speech.

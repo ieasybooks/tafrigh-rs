@@ -10,7 +10,7 @@ use crate::segment::SpeechSpan;
 
 /// Parameters of the Silero timestamp rules.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TimestampParams {
+pub(super) struct TimestampParams {
     /// Probability at or above which a frame is speech.
     pub threshold: f32,
     /// Probability below which a frame is silence. Defaults to `threshold - 0.15` (min 0.01).
@@ -216,8 +216,10 @@ fn to_span(start: i64, end: i64) -> SpeechSpan {
     }
 }
 
-/// Computes padded speech spans for a whole recording of `audio_len` samples.
-pub fn speech_timestamps(
+/// Computes padded speech spans for a whole recording of `audio_len` samples. The streaming
+/// version must match this line-by-line port of the reference, which tests check.
+#[cfg(test)]
+pub(super) fn speech_timestamps(
     probs: &[f32],
     audio_len: usize,
     params: &TimestampParams,
@@ -253,9 +255,9 @@ pub fn speech_timestamps(
     speeches.into_iter().map(|(s, e)| to_span(s, e)).collect()
 }
 
-/// Incremental version of [`speech_timestamps`]; yields identical spans.
+/// Incremental version of `speech_timestamps`; yields identical spans.
 #[derive(Debug, Clone)]
-pub struct StreamingTimestamps {
+pub(super) struct StreamingTimestamps {
     machine: Machine,
     /// Last raw span, start already padded; its end padding waits for the next span.
     pending: Option<(i64, i64)>,

@@ -32,7 +32,7 @@ impl Output {
         let mut formats: Vec<BuiltinFormat> = Vec::new();
         for choice in &self.formats {
             match choice {
-                FormatChoice::All => formats.extend(BuiltinFormat::ALL),
+                FormatChoice::All => formats.extend(BuiltinFormat::SEGMENT_LEVEL),
                 FormatChoice::One(format) => formats.push(*format),
             }
         }

@@ -7,8 +7,8 @@ use std::time::Duration;
 use tafrigh::audio::AudioChunk;
 use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
 use tafrigh::{
-    ChunkOptions, ChunkRecognizer, ChunkedTranscriber, Error, OnChunkError, TranscribeEvent,
-    Transcriber,
+    ChunkOptions, ChunkRecognizer, ChunkedTranscriber, Error, OnChunkError, Recognition,
+    TranscribeEvent, Transcriber,
 };
 use tafrigh_wit::{Endpoint, WitConfig, WitRecognizer};
 use wiremock::matchers::{header, method, path, query_param};
@@ -35,6 +35,16 @@ fn chunk(samples: usize) -> AudioChunk {
 }
 
 /// A dictation stream: one partial and one final transcription per `(text, start_ms, end_ms)`.
+/// All utterance texts joined with spaces.
+fn joined_text(recognition: &Recognition) -> String {
+    let texts: Vec<&str> = recognition
+        .utterances
+        .iter()
+        .map(|utterance| utterance.text.as_str())
+        .collect();
+    texts.join(" ")
+}
+
 fn dictation_stream(utterances: &[(&str, u64, u64)]) -> ResponseTemplate {
     let mut objects = Vec::new();
     for (text, start, end) in utterances {
@@ -105,7 +115,7 @@ async fn sends_wav_like_js_tafrigh_and_parses_utterances() {
         .await
         .unwrap();
     let recognition = recognizer.recognize(&chunk(1600)).await.unwrap();
-    assert_eq!(recognition.joined_text(), "hello there again");
+    assert_eq!(joined_text(&recognition), "hello there again");
     assert_eq!(recognition.utterances.len(), 2);
     assert!((recognition.utterances[1].words[0].end - 0.7).abs() < 1e-9);
 
@@ -137,7 +147,7 @@ async fn retries_rate_limits_and_server_errors() {
 
     let recognizer = WitRecognizer::new(config(&server, &["t"])).await.unwrap();
     let recognition = recognizer.recognize(&chunk(160)).await.unwrap();
-    assert_eq!(recognition.joined_text(), "finally");
+    assert_eq!(joined_text(&recognition), "finally");
     assert_eq!(server.received_requests().await.unwrap().len(), 3);
 }
 
@@ -175,7 +185,7 @@ async fn rate_limits_do_not_use_up_attempts() {
     config.max_attempts = 1;
     let recognizer = WitRecognizer::new(config).await.unwrap();
     let recognition = recognizer.recognize(&chunk(160)).await.unwrap();
-    assert_eq!(recognition.joined_text(), "patience");
+    assert_eq!(joined_text(&recognition), "patience");
     assert_eq!(server.received_requests().await.unwrap().len(), 5);
 }
 
@@ -215,7 +225,7 @@ async fn retries_missing_body_responses() {
 
     let recognizer = WitRecognizer::new(config(&server, &["t"])).await.unwrap();
     let recognition = recognizer.recognize(&chunk(160)).await.unwrap();
-    assert_eq!(recognition.joined_text(), "arrived");
+    assert_eq!(joined_text(&recognition), "arrived");
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
@@ -240,7 +250,7 @@ async fn stalled_requests_time_out_by_audio_length() {
     let recognizer = WitRecognizer::new(config).await.unwrap();
     let started = std::time::Instant::now();
     let recognition = recognizer.recognize(&chunk(1600)).await.unwrap();
-    assert_eq!(recognition.joined_text(), "prompt");
+    assert_eq!(joined_text(&recognition), "prompt");
     assert!(
         started.elapsed() < Duration::from_secs(3),
         "{:?}",

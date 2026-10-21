@@ -4,20 +4,23 @@
 //! Silero 6.2.1's rules. When speech runs longer than the maximum, it is cut at the longest
 //! pause inside it rather than mid-word.
 
+#[cfg(test)]
+mod golden_tests;
 mod model;
-pub mod timestamps;
+mod timestamps;
 
-pub use model::{MODEL_ONNX, ProbabilityStream, SileroModel};
-pub use timestamps::{StreamingTimestamps, TimestampParams, speech_timestamps};
+use model::ProbabilityStream;
+pub use model::SileroModel;
+use timestamps::{StreamingTimestamps, TimestampParams};
 
 use super::{SegmentationSession, Segmenter, SpeechSpan};
 use crate::audio::SAMPLE_RATE;
 use crate::{Error, Result};
 
 /// Samples per Silero frame at 16 kHz.
-pub const WINDOW_SAMPLES: usize = 512;
+const WINDOW_SAMPLES: usize = 512;
 /// Samples of the previous frame prepended to each frame.
-pub const CONTEXT_SAMPLES: usize = 64;
+const CONTEXT_SAMPLES: usize = 64;
 
 /// Settings tuned for chunked cloud recognition.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -48,7 +51,7 @@ impl Default for SileroConfig {
 
 impl SileroConfig {
     /// The full timestamp rules these settings stand for.
-    pub fn timestamp_params(&self) -> TimestampParams {
+    fn timestamp_params(&self) -> TimestampParams {
         TimestampParams {
             threshold: self.threshold,
             min_speech_ms: self.min_speech_ms,
@@ -97,11 +100,6 @@ impl SileroSegmenter {
             model,
             params: config.timestamp_params(),
         })
-    }
-
-    /// Full control over the timestamp rules.
-    pub fn with_params(model: SileroModel, params: TimestampParams) -> Self {
-        Self { model, params }
     }
 }
 

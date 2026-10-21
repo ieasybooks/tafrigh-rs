@@ -1,14 +1,11 @@
 //! Golden tests against the Python reference (silero-vad 6.2.1's `get_speech_timestamps` and
 //! onnxruntime). Regenerate fixtures with `tests/fixtures/generate.py`.
-#![cfg(feature = "silero")]
 
 use base64::Engine;
 use serde_json::Value;
-use tafrigh::segment::silero::{
-    SileroConfig, SileroModel, SileroSegmenter, StreamingTimestamps, TimestampParams,
-    speech_timestamps,
-};
-use tafrigh::segment::{Segmenter, SpeechSpan};
+
+use super::timestamps::speech_timestamps;
+use super::*;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
