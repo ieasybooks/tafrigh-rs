@@ -26,7 +26,7 @@ pub(crate) fn discover_local(
     excluded: Option<&Path>,
 ) -> Result<Vec<MediaItem>> {
     let meta = std::fs::metadata(path)
-        .map_err(|err| Error::Source(format!("{}: {err}", path.display())))?;
+        .map_err(|err| Error::io(format!("reading {}", path.display()), err))?;
     if meta.is_file() {
         return Ok(vec![item(path)]);
     }
@@ -35,7 +35,7 @@ pub(crate) fn discover_local(
     let mut files = Vec::new();
     let mut directories = vec![path.to_owned()];
     while let Some(dir) = directories.pop() {
-        let source_error = |err| Error::Source(format!("{}: {err}", dir.display()));
+        let source_error = |err| Error::io(format!("reading {}", dir.display()), err);
         for entry in std::fs::read_dir(&dir).map_err(source_error)? {
             let entry = entry.map_err(source_error)?;
             let kind = entry.file_type().map_err(source_error)?;

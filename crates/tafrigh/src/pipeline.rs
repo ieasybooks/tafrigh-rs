@@ -15,7 +15,7 @@ use crate::output::{
     Layout, OutputMode, OutputWriter, SampleReservoir, SampleRow, Target, unique_name, write_sample,
 };
 use crate::source::{Input, Media, MediaItem, YtDlp, discover_local};
-use crate::{CaptionProvider, Error, ErrorChain, Result, Segment, Transcriber};
+use crate::{CaptionProvider, Error, Result, Segment, Transcriber};
 
 /// Transcribes inputs (files, folders, URLs) and writes transcripts.
 ///
@@ -163,8 +163,17 @@ impl TafrighBuilder {
 pub struct RunReport {
     /// Every item that was attempted, in order.
     pub items: Vec<ItemReport>,
-    /// Inputs that could not be resolved: `(input, error)`.
-    pub failed_inputs: Vec<(String, String)>,
+    /// Inputs that could not be resolved into items.
+    pub failed_inputs: Vec<FailedInput>,
+}
+
+/// An input that could not be resolved into items.
+#[derive(Debug, Clone)]
+pub struct FailedInput {
+    /// The input as given.
+    pub input: Input,
+    /// Why it failed.
+    pub error: Arc<Error>,
 }
 
 impl RunReport {
@@ -201,7 +210,7 @@ pub enum ItemStatus {
     /// Skipped because its outputs already existed.
     Skipped,
     /// Failed with this error.
-    Failed(String),
+    Failed(Arc<Error>),
 }
 
 impl Tafrigh {
@@ -345,25 +354,27 @@ impl Tafrigh {
         let mut layout = Layout::new(self.output_mode, self.output.clone(), inputs);
         let mut resolved = Vec::new();
         for (index, input) in inputs.iter().enumerate() {
-            let label = input.to_string();
             events.report(Event::InputResolving {
-                input: label.clone(),
+                input: input.clone(),
             });
             let items = match self.resolve(input).await {
                 Ok(items) => items,
                 Err(err @ Error::ToolUnavailable { .. }) => return Err(err),
                 Err(err) => {
-                    let error = ErrorChain(&err).to_string();
+                    let error = Arc::new(err);
                     events.report(Event::InputFailed {
-                        input: label.clone(),
+                        input: input.clone(),
                         error: error.clone(),
                     });
-                    report.failed_inputs.push((label, error));
+                    report.failed_inputs.push(FailedInput {
+                        input: input.clone(),
+                        error,
+                    });
                     continue;
                 }
             };
             events.report(Event::InputResolved {
-                input: label,
+                input: input.clone(),
                 items: items.len(),
             });
             let total = items.len();
@@ -603,10 +614,7 @@ impl Tafrigh {
         } = done;
         let written = match outcome {
             Outcome::Skipped => {
-                events.report(Event::ItemSkipped {
-                    item: info.clone(),
-                    reason: "outputs exist".into(),
-                });
+                events.report(Event::ItemSkipped { item: info.clone() });
                 return Ok(ItemReport {
                     item: info,
                     status: ItemStatus::Skipped,
@@ -630,7 +638,7 @@ impl Tafrigh {
             }
             Err(err @ Error::ToolUnavailable { .. }) => return Err(err),
             Err(err) => {
-                let error = ErrorChain(&err).to_string();
+                let error = Arc::new(err);
                 events.report(Event::ItemFailed {
                     item: info.clone(),
                     error: error.clone(),

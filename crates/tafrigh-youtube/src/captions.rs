@@ -139,7 +139,7 @@ fn timed_words(parts: &[CaptionText], start: u64, end: f64) -> Vec<Word> {
 /// Read cue text and timing directly; JSON3 avoids VTT's rolling display markup.
 pub(super) fn parse_json3(bytes: &[u8]) -> Result<Vec<Segment>> {
     let captions: Captions = serde_json::from_slice(bytes)
-        .map_err(|err| Error::Source(format!("invalid YouTube JSON3 captions: {err}")))?;
+        .map_err(|err| Error::parse("invalid YouTube JSON3 captions", err))?;
     let mut cues: Vec<(u64, Segment)> = Vec::new();
     for event in captions.events {
         let text: String = event.segs.iter().map(|part| part.utf8.as_str()).collect();

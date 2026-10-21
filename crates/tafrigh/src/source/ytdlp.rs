@@ -122,9 +122,8 @@ impl YtDlp {
 
     /// Parses yt-dlp JSON metadata into items and saves it when metadata output is enabled.
     async fn items(&self, url: &str, output: &[u8]) -> Result<Vec<MediaItem>> {
-        let info: Value = serde_json::from_slice(output).map_err(|err| {
-            Error::Source(format!("yt-dlp returned invalid JSON for {url}: {err}"))
-        })?;
+        let info: Value = serde_json::from_slice(output)
+            .map_err(|err| Error::parse(format!("yt-dlp returned invalid JSON for {url}"), err))?;
 
         if self.save_metadata {
             let id = info

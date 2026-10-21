@@ -50,14 +50,13 @@ impl SileroModel {
                 .into_optimized()?
                 .into_runnable()
         };
-        let plan = load().map_err(|err| Error::Vad(format!("loading Silero model: {err:#}")))?;
+        let plan = load().map_err(|err| Error::Vad(err.context("loading Silero model").into()))?;
         Ok(Self { plan })
     }
 
     /// Starts a fresh stream (zeroed recurrent state) for one recording.
     pub(super) fn stream(&self) -> Result<ProbabilityStream> {
-        let zero =
-            || Tensor::zero::<f32>(&[1, 1, STATE]).map_err(|err| Error::Vad(err.to_string()));
+        let zero = || Tensor::zero::<f32>(&[1, 1, STATE]).map_err(|err| Error::Vad(err.into()));
         Ok(ProbabilityStream {
             model: self.clone(),
             h: zero()?,
@@ -134,13 +133,13 @@ impl ProbabilityStream {
                 self.c.clone().into()
             ))
         };
-        let outputs = run().map_err(|err| Error::Vad(format!("{err:#}")))?;
+        let outputs = run().map_err(|err| Error::Vad(err.into()))?;
         let probs = outputs[0]
             .to_plain_array_view::<f32>()
-            .map_err(|err| Error::Vad(err.to_string()))?;
+            .map_err(|err| Error::Vad(err.into()))?;
         for &p in probs.iter().take(valid) {
             if !(0.0..=1.0).contains(&p) {
-                return Err(Error::Vad(format!("invalid speech probability {p}")));
+                return Err(Error::Vad(format!("invalid speech probability {p}").into()));
             }
             out.push(p);
         }

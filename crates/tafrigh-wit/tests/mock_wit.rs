@@ -421,7 +421,11 @@ async fn transcribes_real_audio_through_silero_and_wit() {
     assert!(
         matches!(events[0], TranscribeEvent::Started { duration: Some(d) } if (d - 11.0).abs() < 0.01)
     );
-    assert!(events.contains(&TranscribeEvent::Segmented { chunks: 4 }));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, TranscribeEvent::Segmented { chunks: 4 }))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

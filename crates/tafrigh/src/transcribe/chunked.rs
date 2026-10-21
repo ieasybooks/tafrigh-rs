@@ -176,21 +176,21 @@ impl ChunkedTranscriber {
                 source,
             }),
             OnChunkError::Skip => {
-                let error = ErrorChain(&*source).to_string();
                 tracing::warn!(
-                    "skipping {}chunk #{} ({:.2}s–{:.2}s) of {}: {error}",
+                    "skipping {}chunk #{} ({:.2}s–{:.2}s) of {}: {}",
                     if resent { "the resend of " } else { "" },
                     meta.index,
                     meta.start,
                     meta.end,
-                    media.display()
+                    media.display(),
+                    ErrorChain(&*source)
                 );
                 if !resent {
                     progress.report(TranscribeEvent::ChunkSkipped {
                         index: meta.index,
                         start: meta.start,
                         end: meta.end,
-                        error,
+                        error: source.into(),
                     });
                 }
                 Ok(())

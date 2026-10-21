@@ -6,6 +6,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::Error;
+use crate::source::Input;
+
 /// Receives progress events of type `E`.
 pub trait Progress<E = TranscribeEvent>: Send + Sync {
     /// Handles one event. Called from the task doing the work, so keep it cheap.
@@ -30,7 +33,7 @@ impl<E> Progress<E> for NoProgress {
 }
 
 /// Progress of transcribing a single media file. Times are in seconds.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum TranscribeEvent {
     /// Decoding started.
@@ -71,8 +74,8 @@ pub enum TranscribeEvent {
         start: f64,
         /// End of the chunk in the source.
         end: f64,
-        /// Why recognition failed.
-        error: String,
+        /// Why recognition failed, as the recognizer reported it.
+        error: Arc<dyn std::error::Error + Send + Sync>,
     },
     /// All audio was decoded and segmented.
     Segmented {
@@ -91,27 +94,27 @@ pub struct ItemInfo {
 }
 
 /// Progress of a whole [`crate::Tafrigh`] run.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Event {
     /// An input (file, folder or URL) is being expanded into items.
     InputResolving {
         /// The input as given.
-        input: String,
+        input: Input,
     },
     /// An input was expanded.
     InputResolved {
         /// The input as given.
-        input: String,
+        input: Input,
         /// Number of items found.
         items: usize,
     },
     /// An input could not be expanded; its items are not processed.
     InputFailed {
         /// The input as given.
-        input: String,
+        input: Input,
         /// Why it failed.
-        error: String,
+        error: Arc<Error>,
     },
     /// Work on an item started.
     ItemStarted {
@@ -122,12 +125,10 @@ pub enum Event {
         /// Number of items in the current input.
         total: usize,
     },
-    /// An item was skipped.
+    /// An item was skipped because all of its outputs already exist.
     ItemSkipped {
         /// The item.
         item: ItemInfo,
-        /// Why it was skipped.
-        reason: String,
     },
     /// An item's audio is being downloaded.
     Downloading {
@@ -160,6 +161,6 @@ pub enum Event {
         /// The item.
         item: ItemInfo,
         /// Why it failed.
-        error: String,
+        error: Arc<Error>,
     },
 }

@@ -107,9 +107,8 @@ impl CaptionProvider for YoutubeCaptions {
         let output = ytdlp
             .run(CAPTIONS_ONLY.into_iter().chain(dump_info), url)
             .await?;
-        let mut info: Value = serde_json::from_slice(&output).map_err(|err| {
-            Error::Source(format!("yt-dlp returned invalid JSON for {url}: {err}"))
-        })?;
+        let mut info: Value = serde_json::from_slice(&output)
+            .map_err(|err| Error::parse(format!("yt-dlp returned invalid JSON for {url}"), err))?;
         captions::select_track(&mut info, language)?;
 
         let temporary =

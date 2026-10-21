@@ -44,7 +44,7 @@ mod types;
 
 pub use error::{BoxError, Error, ErrorChain, Result};
 pub use event::{Event, ItemInfo, NoProgress, Progress, TranscribeEvent};
-pub use pipeline::{ItemReport, ItemStatus, RunReport, Tafrigh, TafrighBuilder};
+pub use pipeline::{FailedInput, ItemReport, ItemStatus, RunReport, Tafrigh, TafrighBuilder};
 pub use transcribe::{
     CaptionProvider, ChunkOptions, ChunkRecognizer, ChunkedTranscriber, OnChunkError, Recognition,
     Transcriber, Utterance,
