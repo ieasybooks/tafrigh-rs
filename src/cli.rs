@@ -6,101 +6,183 @@
 
 use std::path::PathBuf;
 
-use clap::{CommandFactory, Parser, ValueEnum};
 use tafrigh::output::BuiltinFormat;
+use usage_rs::{ValidationError, ValueEnum};
 
-/// The --help footer. Keep in sync with the exit codes in main.rs.
+/// Tool requirements and reusable argument-file syntax.
 const HELP_FOOTER: &str = "\
 Requires ffmpeg, plus yt-dlp for URLs (and a JavaScript runtime such as Deno for YouTube).
 
-Exit codes: 0 success, 1 error (e.g. a missing program), 2 invalid arguments,
-3 finished but some inputs or items failed, 130 interrupted.";
+Use @FILE to read options and inputs from a file of shell-style words; @@ escapes a literal @.
+Boolean transcription flags accept a --no- prefix, such as --no-merge, to override presets.";
+
+/// Transcribe audio and video into subtitles and text with Wit.ai.
+///
+/// Transcription is the default command. Use completions to set up your shell, or
+/// spec to export the CLI definition for documentation and other Usage tools.
+#[derive(Debug, Clone, usage_rs::Cli)]
+#[usage(
+    bin = "tafrigh",
+    version,
+    repository = env!("CARGO_PKG_REPOSITORY"),
+    license = env!("CARGO_PKG_LICENSE"),
+    completion,
+    default_subcommand = "transcribe",
+    default_subcommand_flags,
+    default_subcommand_help,
+    arg_required_else_help,
+    unknown_flags = "error",
+    max_term_width = 100,
+    validate_with = validate,
+    exit_code(0, "Success"),
+    exit_code(1, "Setup, filesystem or other runtime error"),
+    exit_code(2, "Invalid arguments"),
+    example("tafrigh lecture.mp3 -w TOKEN", help = "Transcribe a local recording"),
+    example("tafrigh completions zsh --install", help = "Install shell completions")
+)]
+pub struct Cli {
+    #[usage(subcommand)]
+    pub command: Command,
+}
+
+/// Operations available from the command line.
+#[derive(Debug, Clone, usage_rs::Subcommands)]
+pub enum Command {
+    /// Transcribe files, folders, videos or playlists.
+    Transcribe(Box<Args>),
+    /// Generate or install shell completions.
+    Completions(Completions),
+    /// Print the Usage specification as KDL for docs, man pages and tooling.
+    Spec,
+}
+
+/// Generate a completion script, or install it in the shell's user directory.
+///
+/// Scripts call tafrigh directly; no separate usage executable is needed.
+/// Installation prints any shell setup still required and preserves unrelated files.
+#[derive(Debug, Clone, usage_rs::Args)]
+#[usage(
+    unknown_flags = "error",
+    example("tafrigh completions bash", help = "Print a script to stdout"),
+    example(
+        "tafrigh completions zsh --install --dry-run",
+        help = "Preview installation"
+    )
+)]
+pub struct Completions {
+    /// Shell to generate completions for.
+    #[usage(arg, choices("bash", "elvish", "fish", "nu", "powershell", "zsh"))]
+    pub shell: String,
+
+    /// Install into this shell's user completion directory.
+    #[usage(long)]
+    pub install: bool,
+
+    /// Show the destination and setup instructions without writing a file.
+    #[usage(long, requires("--install"))]
+    pub dry_run: bool,
+}
 
 /// Transcribe audio and video into subtitles and text with Wit.ai.
 ///
 /// Inputs can be media files, folders of media files, or URLs (videos, playlists,
 /// channels; anything yt-dlp supports).
-#[derive(Debug, Parser)]
-#[command(
-    name = "tafrigh",
-    version,
-    about,
+#[derive(Debug, Clone, usage_rs::Args)]
+#[usage(
+    unknown_flags = "error",
     max_term_width = 100,
-    after_help = HELP_FOOTER
+    after_help = HELP_FOOTER,
+    exit_code(3, "Finished, but some inputs or items failed"),
+    exit_code(130, "Interrupted with Ctrl-C"),
+    example("tafrigh transcribe lectures/ -r -o transcripts -f srt,txt -w TOKEN", help = "Mirror a folder of recordings"),
+    example("tafrigh transcribe lecture.mp3 -f srt --words -w TOKEN", help = "Include word-level subtitles"),
+    example("tafrigh transcribe https://example.com/playlist --skip-existing -w TOKEN", help = "Resume a playlist")
 )]
 pub struct Args {
     /// Files, folders or URLs to transcribe.
-    #[arg(required = true, value_name = "INPUT")]
+    #[usage(arg, required, name = "INPUT", value_hint = usage_rs::ValueHint::AnyPath)]
     pub inputs: Vec<String>,
 
     /// Include media in subdirectories. Directory symlinks are not followed.
-    #[arg(short = 'r', long)]
+    #[usage(short = 'r', long, negate = "no-recursive")]
     pub recursive: bool,
 
     /// Hide progress bars.
-    #[arg(short, long)]
+    #[usage(short, long, negate = "no-quiet")]
     pub quiet: bool,
 
     /// More logging (-v debug, -vv trace). RUST_LOG overrides.
-    #[arg(short, long, action = clap::ArgAction::Count)]
+    #[usage(short, long, count)]
     pub verbose: u8,
 
-    #[command(flatten)]
+    #[usage(flatten, next_help_heading = "Output")]
     pub output: Output,
 
-    #[command(flatten)]
+    #[usage(flatten, next_help_heading = "Segmentation")]
     pub segmentation: Segmentation,
 
-    #[command(flatten)]
+    #[usage(flatten, next_help_heading = "Wit.ai")]
     pub wit: Wit,
 
-    #[command(flatten)]
+    #[usage(flatten, next_help_heading = "Downloads and tools")]
     pub tools: Tools,
 }
 
 /// Where transcripts go and what they contain.
-#[derive(Debug, clap::Args)]
-#[command(next_help_heading = "Output")]
+#[derive(Debug, Clone, usage_rs::Args)]
 pub struct Output {
     /// Directory for transcripts; selects tree-to-tree mode unless --output-mode is given.
-    #[arg(short = 'o', long = "output-dir", value_name = "DIR")]
+    #[usage(short = 'o', long = "output-dir", value_name = "DIR", value_hint = usage_rs::ValueHint::DirPath)]
     pub dir: Option<PathBuf>,
 
     /// Destination layout [default: side-by-side without -o, tree-to-tree with -o].
-    #[arg(long = "output-mode", value_enum, value_name = "MODE")]
+    #[usage(long = "output-mode", value_enum, value_name = "MODE")]
     pub mode: Option<OutputMode>,
 
     /// Output formats, comma-separated: txt, srt, vtt, csv, tsv, json, all, or word-level
     /// words-srt, words-vtt, words-csv, words-tsv, words-json.
-    #[arg(
+    #[usage(
         short,
         long = "format",
         value_name = "FORMATS",
-        value_delimiter = ',',
-        default_value = "all",
-        value_parser = parse_format
+        delimiter = ',',
+        default = "all",
+        choices(
+            "all",
+            "txt",
+            "srt",
+            "vtt",
+            "csv",
+            "tsv",
+            "json",
+            "words-srt",
+            "words-vtt",
+            "words-csv",
+            "words-tsv",
+            "words-json"
+        )
     )]
     pub formats: Vec<FormatChoice>,
 
     /// Also write word timings as <id>.words.<ext> for each chosen srt, vtt, csv, tsv or json
     /// format (one cue or row per word).
-    #[arg(long)]
+    #[usage(long, negate = "no-words")]
     pub words: bool,
 
     /// Merge segments with fewer words into the following ones (0 disables).
-    #[arg(long, value_name = "N", default_value_t = 1)]
+    #[usage(long, value_name = "N", default = "1")]
     pub min_words: usize,
 
     /// Also write uncompacted transcripts as <id>.uncompacted.<ext>.
-    #[arg(long)]
+    #[usage(long, negate = "no-keep-uncompacted")]
     pub keep_uncompacted: bool,
 
     /// Skip items when every requested output file already exists.
-    #[arg(long)]
+    #[usage(long, negate = "no-skip-existing")]
     pub skip_existing: bool,
 
     /// Write a sample CSV with this many random segments; suffix its name on collisions.
-    #[arg(long, value_name = "N", default_value_t = 0)]
+    #[usage(long, value_name = "N", default = "0")]
     pub sample: usize,
 }
 
@@ -117,19 +199,22 @@ pub enum OutputMode {
 
 impl Output {
     /// Resolve and validate the destination mode before any tools or network requests.
-    pub fn mode(&self) -> Result<tafrigh::output::OutputMode, clap::Error> {
-        use clap::error::ErrorKind;
+    pub fn mode(&self) -> Result<tafrigh::output::OutputMode, ValidationError> {
         use tafrigh::output::OutputMode as Mode;
 
         match (self.mode, self.dir.is_some()) {
-            (Some(OutputMode::SideBySide), true) => Err(Args::command().error(
-                ErrorKind::ArgumentConflict,
-                "--output-mode side-by-side cannot be used with --output-dir",
-            )),
-            (Some(OutputMode::TreeToTree | OutputMode::Flat), false) => Err(Args::command().error(
-                ErrorKind::MissingRequiredArgument,
-                "--output-mode tree-to-tree and flat require --output-dir",
-            )),
+            (Some(OutputMode::SideBySide), true) => Err(ValidationError::field("--output-mode")
+                .value("side-by-side")
+                .reason("cannot be used with --output-dir")),
+            (Some(OutputMode::TreeToTree | OutputMode::Flat), false) => {
+                Err(ValidationError::field("--output-mode")
+                    .value(if self.mode == Some(OutputMode::Flat) {
+                        "flat"
+                    } else {
+                        "tree-to-tree"
+                    })
+                    .reason("tree-to-tree and flat require --output-dir"))
+            }
             (Some(OutputMode::SideBySide) | None, false) => Ok(Mode::SideBySide),
             (Some(OutputMode::TreeToTree) | None, true) => Ok(Mode::TreeToTree),
             (Some(OutputMode::Flat), true) => Ok(Mode::Flat),
@@ -146,70 +231,68 @@ pub enum FormatChoice {
     One(BuiltinFormat),
 }
 
-fn parse_format(value: &str) -> Result<FormatChoice, String> {
-    if value.trim().eq_ignore_ascii_case("all") {
-        Ok(FormatChoice::All)
-    } else {
-        value.trim().parse().map(FormatChoice::One)
+impl std::str::FromStr for FormatChoice {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.trim().eq_ignore_ascii_case("all") {
+            Ok(FormatChoice::All)
+        } else {
+            value.trim().parse().map(FormatChoice::One)
+        }
     }
 }
 
 /// How audio is cut into chunks.
-#[derive(Debug, clap::Args)]
-#[command(next_help_heading = "Segmentation")]
+#[derive(Debug, Clone, usage_rs::Args)]
 pub struct Segmentation {
     /// How to find speech.
-    #[arg(long, value_enum, default_value_t = Vad::Silero)]
+    #[usage(long, value_enum, default = "silero")]
     pub vad: Vad,
 
     /// Longest chunk sent for recognition, in seconds (Wit allows up to 60 on dictation and
     /// 20 on speech, padding included).
-    #[arg(long, value_name = "SECONDS", default_value_t = 15.0)]
+    #[usage(long, value_name = "SECONDS", default = "15.0")]
     pub max_chunk: f64,
 
     /// Merge consecutive speech up to --max-chunk: fewer requests and more context per
     /// request; segments still follow Wit's utterances.
-    #[arg(long)]
+    #[usage(long, negate = "no-merge")]
     pub merge: bool,
 
     /// Speech probability threshold.
-    #[arg(long, value_name = "P", default_value_t = 0.5)]
+    #[usage(long, value_name = "P", default = "0.5")]
     pub vad_threshold: f32,
 
     /// Shortest speech kept, in milliseconds.
-    #[arg(long, value_name = "MS", default_value_t = 500)]
+    #[usage(long, value_name = "MS", default = "500")]
     pub min_speech_ms: u32,
 
     /// Silence that ends a chunk, in milliseconds.
-    #[arg(long, value_name = "MS", default_value_t = 300)]
+    #[usage(long, value_name = "MS", default = "300")]
     pub min_silence_ms: u32,
 
     /// Context kept around detected speech, in milliseconds.
-    #[arg(long, value_name = "MS", default_value_t = 250)]
+    #[usage(long, value_name = "MS", default = "250")]
     pub speech_pad_ms: u32,
 
     /// Pad each chunk on both sides with this many seconds of silence (0 disables). Wit drops
     /// words that start or end right at a chunk edge.
-    #[arg(long, value_name = "SECONDS", default_value_t = 0.5)]
+    #[usage(long, value_name = "SECONDS", default = "0.5")]
     pub pad: f64,
 
     /// Pad with white noise peaking at this level instead of silence (0 = full scale,
     /// as in the Python tafrigh).
-    #[arg(
-        long,
-        value_name = "DBFS",
-        allow_negative_numbers = true,
-        requires = "pad"
-    )]
+    #[usage(long, value_name = "DBFS", allow_negative_numbers)]
     pub pad_noise: Option<f64>,
 
     /// Resend stretches of speech that Wit returned no words for, when at least this many
     /// seconds long (0 disables). Wit sometimes stops transcribing partway through a chunk.
-    #[arg(long, value_name = "SECONDS", default_value_t = 1.0)]
+    #[usage(long, value_name = "SECONDS", default = "1.0")]
     pub resend_gaps: f64,
 
     /// What to do when a chunk fails after all retries.
-    #[arg(long, value_enum, value_name = "POLICY", default_value_t = OnChunkError::Abort)]
+    #[usage(long, value_enum, value_name = "POLICY", default = "abort")]
     pub on_chunk_error: OnChunkError,
 }
 
@@ -232,60 +315,61 @@ pub enum OnChunkError {
 }
 
 /// Wit.ai settings.
-#[derive(Debug, clap::Args)]
-#[command(next_help_heading = "Wit.ai")]
+#[derive(Debug, Clone, usage_rs::Args)]
 pub struct Wit {
     /// Wit client access tokens (repeat or comma-separate). All apps must share a language.
-    #[arg(
+    #[usage(
         short = 'w',
         long = "wit-token",
         value_name = "TOKEN",
         env = "TAFRIGH_WIT_TOKENS",
-        hide_env_values = true,
-        value_delimiter = ',',
-        required = true
+        value_hint = usage_rs::ValueHint::Other,
+        hide_env_values,
+        delimiter = ',',
+        required
     )]
     pub tokens: Vec<String>,
 
     /// Language of the Wit apps (e.g. ar); detected from the tokens when omitted.
-    #[arg(long = "wit-language", value_name = "LANG")]
+    #[usage(
+        long = "wit-language",
+        value_name = "LANG",
+        env = "TAFRIGH_WIT_LANGUAGE"
+    )]
     pub language: Option<String>,
 
     /// Request starts per second for each token.
-    #[arg(long = "wit-rps", value_name = "N", default_value_t = 1.0)]
+    #[usage(long = "wit-rps", value_name = "N", default = "1.0")]
     pub requests_per_second: f64,
 
     /// Concurrent requests per token [default: enough to keep up with --wit-rps; Wit answers
     /// at about the pace of the audio, so longer chunks need more].
-    #[arg(long = "wit-concurrency", value_name = "N")]
+    #[usage(long = "wit-concurrency", value_name = "N")]
     pub concurrency: Option<usize>,
 
     /// Attempts per chunk, including the first.
-    #[arg(long = "wit-attempts", value_name = "N", default_value_t = 5)]
+    #[usage(long = "wit-attempts", value_name = "N", default = "5")]
     pub attempts: u32,
 
     /// Longest audio per request in seconds [default: 60 for dictation, 20 for speech].
-    #[arg(long = "wit-max-audio", value_name = "SECONDS")]
+    #[usage(long = "wit-max-audio", value_name = "SECONDS")]
     pub max_audio: Option<f64>,
 
     /// Wit endpoint: dictation (transcription only) or speech (also extracts intents).
-    #[arg(long = "wit-endpoint", value_enum, default_value_t = WitEndpoint::Dictation)]
+    #[usage(long = "wit-endpoint", value_enum, default = "dictation")]
     pub endpoint: WitEndpoint,
 
     /// Wit API base URL (e.g. a proxy or a local mock server).
-    #[arg(
+    #[usage(
         long = "wit-api-url",
         value_name = "URL",
-        default_value = "https://api.wit.ai"
+        default = "https://api.wit.ai",
+        value_hint = usage_rs::ValueHint::Url
     )]
     pub api_url: String,
 
     /// Wit API version, sent as the v query parameter.
-    #[arg(
-        long = "wit-api-version",
-        value_name = "VERSION",
-        default_value = "20240304"
-    )]
+    #[usage(long = "wit-api-version", value_name = "VERSION", default = "20240304")]
     pub api_version: String,
 }
 
@@ -299,48 +383,128 @@ pub enum WitEndpoint {
 }
 
 /// Downloads and external programs.
-#[derive(Debug, clap::Args)]
-#[command(next_help_heading = "Downloads and tools")]
+#[derive(Debug, Clone, usage_rs::Args)]
 pub struct Tools {
     /// Extra yt-dlp arguments, e.g. "--cookies cookies.txt --playlist-items 1-10".
-    #[arg(long, value_name = "ARGS", allow_hyphen_values = true)]
+    #[usage(long, value_name = "ARGS", allow_hyphen_values)]
     pub yt_dlp_args: Option<String>,
 
     /// Where downloaded audio goes [default: -o, or the current directory].
-    #[arg(long, value_name = "DIR")]
+    #[usage(long, value_name = "DIR", value_hint = usage_rs::ValueHint::DirPath)]
     pub download_dir: Option<PathBuf>,
 
     /// Save yt-dlp's metadata for each URL as <id>.info.json.
-    #[arg(long)]
+    #[usage(long, negate = "no-save-metadata")]
     pub save_metadata: bool,
 
     /// yt-dlp executable, needed for URL inputs.
-    #[arg(long, value_name = "PATH", default_value = "yt-dlp")]
+    #[usage(long, value_name = "PATH", default = "yt-dlp", value_hint = usage_rs::ValueHint::ExecutablePath, env = "TAFRIGH_YT_DLP")]
     pub yt_dlp: PathBuf,
 
     /// ffmpeg executable (required).
-    #[arg(long, value_name = "PATH", default_value = "ffmpeg")]
+    #[usage(long, value_name = "PATH", default = "ffmpeg", value_hint = usage_rs::ValueHint::ExecutablePath, env = "TAFRIGH_FFMPEG")]
     pub ffmpeg: PathBuf,
 
     /// ffprobe executable (optional; only used for progress percentages).
-    #[arg(long, value_name = "PATH", default_value = "ffprobe")]
+    #[usage(long, value_name = "PATH", default = "ffprobe", value_hint = usage_rs::ValueHint::ExecutablePath, env = "TAFRIGH_FFPROBE")]
     pub ffprobe: PathBuf,
+}
+
+/// Validate user options before constructing tools, models or HTTP clients.
+fn validate(cli: &Cli) -> Result<(), ValidationError> {
+    let Command::Transcribe(args) = &cli.command else {
+        return Ok(());
+    };
+    args.output.mode()?;
+    args.output
+        .formats()
+        .map_err(|error| ValidationError::field("--format").reason(error.to_string()))?;
+
+    let segmentation = &args.segmentation;
+    for (name, value, allow_zero) in [
+        ("--max-chunk", segmentation.max_chunk, false),
+        ("--pad", segmentation.pad, true),
+        ("--resend-gaps", segmentation.resend_gaps, true),
+        ("--wit-rps", args.wit.requests_per_second, false),
+    ] {
+        if !value.is_finite() || value < 0.0 || (!allow_zero && value == 0.0) {
+            return Err(ValidationError::field(name)
+                .value(value.to_string())
+                .reason(if allow_zero {
+                    "must be finite and zero or positive"
+                } else {
+                    "must be finite and positive"
+                }));
+        }
+    }
+    if !(0.0..=1.0).contains(&segmentation.vad_threshold) {
+        return Err(ValidationError::field("--vad-threshold")
+            .value(segmentation.vad_threshold.to_string())
+            .reason("must be between 0 and 1"));
+    }
+    if let Some(noise) = segmentation.pad_noise {
+        if !noise.is_finite() || noise > 0.0 {
+            return Err(ValidationError::field("--pad-noise")
+                .value(noise.to_string())
+                .reason("must be finite and at most 0 dBFS"));
+        }
+        if segmentation.pad == 0.0 {
+            return Err(
+                ValidationError::field("--pad-noise").reason("requires --pad greater than zero")
+            );
+        }
+    }
+    if args.wit.tokens.iter().all(|token| token.trim().is_empty()) {
+        return Err(
+            ValidationError::field("--wit-token").reason("at least one nonblank token is required")
+        );
+    }
+    if args.wit.concurrency == Some(0) || args.wit.attempts == 0 {
+        return Err(ValidationError::field(if args.wit.attempts == 0 {
+            "--wit-attempts"
+        } else {
+            "--wit-concurrency"
+        })
+        .value("0")
+        .reason("must be at least 1"));
+    }
+    let max_audio = args.wit.config(segmentation.request_seconds()).max_audio();
+    if !max_audio.is_finite() || max_audio <= 0.0 {
+        return Err(ValidationError::field("--wit-max-audio")
+            .value(max_audio.to_string())
+            .reason("must be finite and positive"));
+    }
+    if segmentation.request_seconds() > max_audio + 1e-9 {
+        return Err(ValidationError::field("--max-chunk")
+            .value(segmentation.max_chunk.to_string())
+            .reason(format!(
+                "chunk plus padding exceeds the {max_audio}s Wit audio limit"
+            )));
+    }
+    if let Some(extra) = &args.tools.yt_dlp_args {
+        shell_words::split(extra)
+            .map_err(|error| ValidationError::field("--yt-dlp-args").reason(error.to_string()))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use clap::CommandFactory;
+    use std::ffi::OsStr;
 
-    #[test]
-    fn command_is_valid() {
-        Args::command().debug_assert();
+    use super::*;
+
+    fn parse(argv: &[&str]) -> Args {
+        let argv: Vec<_> = argv.iter().map(OsStr::new).collect();
+        let Command::Transcribe(parsed) = Cli::parse_from(&argv).unwrap().command else {
+            panic!("expected transcription");
+        };
+        *parsed
     }
 
     #[test]
-    fn parses_typical_invocation() {
-        let args = Args::try_parse_from([
-            "tafrigh",
+    fn parses_lists_counts_defaults_and_hyphenated_values() {
+        let args = parse(&[
             "-w",
             "a,b",
             "-w",
@@ -354,9 +518,9 @@ mod tests {
             "-6",
             "--yt-dlp-args",
             "--playlist-items 1-3",
+            "-vv",
             "lecture.mp3",
-        ])
-        .unwrap();
+        ]);
         assert_eq!(args.wit.tokens, ["a", "b", "c"]);
         assert_eq!(
             args.output.formats,
@@ -370,65 +534,90 @@ mod tests {
             args.tools.yt_dlp_args.as_deref(),
             Some("--playlist-items 1-3")
         );
+        assert_eq!(args.verbose, 2);
         assert_eq!(args.inputs, ["lecture.mp3"]);
         assert!(!args.output.words);
         assert!(!args.recursive);
     }
 
     #[test]
-    fn parses_recursive_flags() {
-        for flag in ["-r", "--recursive"] {
-            let args = Args::try_parse_from(["tafrigh", "-w", "token", flag, "media/"]).unwrap();
-            assert!(args.recursive);
-        }
-    }
-
-    #[test]
-    fn output_mode_defaults_and_constraints() {
-        use tafrigh::output::OutputMode as Mode;
-        for (flags, expected) in [
-            (vec![], Ok(Mode::SideBySide)),
-            (vec!["-o", "out"], Ok(Mode::TreeToTree)),
-            (vec!["--output-mode", "side-by-side"], Ok(Mode::SideBySide)),
-            (
-                vec!["--output-mode", "tree-to-tree", "-o", "out"],
-                Ok(Mode::TreeToTree),
-            ),
-            (vec!["--output-mode", "flat", "-o", "out"], Ok(Mode::Flat)),
-            (
-                vec!["--output-mode", "side-by-side", "-o", "out"],
-                Err(clap::error::ErrorKind::ArgumentConflict),
-            ),
-            (
-                vec!["--output-mode", "tree-to-tree"],
-                Err(clap::error::ErrorKind::MissingRequiredArgument),
-            ),
-            (
-                vec!["--output-mode", "flat"],
-                Err(clap::error::ErrorKind::MissingRequiredArgument),
-            ),
+    fn direct_and_explicit_transcription_share_defaults() {
+        for command in [
+            vec!["recording.mp3", "-w", "test"],
+            vec!["transcribe", "recording.mp3", "-w", "test"],
         ] {
-            let mut argv = vec!["tafrigh", "-w", "token", "media"];
-            argv.extend(flags);
-            let parsed = Args::try_parse_from(argv).unwrap();
-            assert_eq!(parsed.output.mode().map_err(|err| err.kind()), expected);
+            let args = parse(&command);
+            assert_eq!(args.output.formats, [FormatChoice::All]);
+            assert_eq!(
+                args.output.mode().unwrap(),
+                tafrigh::output::OutputMode::SideBySide
+            );
+            assert_eq!(args.segmentation.max_chunk, 15.0);
         }
     }
 
     #[test]
-    fn parses_formats() {
-        let args =
-            Args::try_parse_from(["tafrigh", "-w", "a", "--words", "-f", "all,words-json", "x"])
-                .unwrap();
-        assert!(args.output.words);
+    fn later_options_override_presets() {
+        let args = parse(&[
+            "recording.mp3",
+            "-w",
+            "test",
+            "-o",
+            "first",
+            "-o",
+            "last",
+            "--merge",
+            "--no-merge",
+            "-r",
+            "--no-recursive",
+            "--no-quiet",
+            "-q",
+            "--words",
+            "--no-words",
+            "--keep-uncompacted",
+            "--no-keep-uncompacted",
+            "--skip-existing",
+            "--no-skip-existing",
+            "--save-metadata",
+            "--no-save-metadata",
+        ]);
+        assert_eq!(args.output.dir, Some("last".into()));
         assert_eq!(
-            args.output.formats,
-            [
-                FormatChoice::All,
-                FormatChoice::One(BuiltinFormat::WordsJson)
-            ]
+            args.output.mode().unwrap(),
+            tafrigh::output::OutputMode::TreeToTree
         );
-        let err = Args::try_parse_from(["tafrigh", "-w", "a", "-f", "docx", "x"]).unwrap_err();
-        assert!(err.to_string().contains("unknown format"), "{err}");
+        assert!(!args.segmentation.merge);
+        assert!(!args.recursive);
+        assert!(args.quiet);
+        assert!(!args.output.words);
+        assert!(!args.output.keep_uncompacted);
+        assert!(!args.output.skip_existing);
+        assert!(!args.tools.save_metadata);
+    }
+
+    #[test]
+    fn completions_offer_choices_and_appropriate_path_kinds() {
+        use usage_rs::test::{self as harness, Files};
+
+        assert!(
+            harness::candidates(Cli::spec(), "tafrigh transcribe --format w")
+                .contains(&"words-srt".to_owned())
+        );
+        assert_eq!(
+            harness::candidates(Cli::spec(), "tafrigh transcribe --output-mode tr"),
+            ["tree-to-tree"]
+        );
+        assert_eq!(
+            harness::completion(Cli::spec(), "tafrigh transcribe --output-dir ").files,
+            Some(Files::Dirs)
+        );
+        assert_eq!(
+            harness::completion(Cli::spec(), "tafrigh transcribe ").files,
+            Some(Files::Any)
+        );
+        assert_eq!(
+            harness::completion(Cli::spec(), "tafrigh transcribe --wit-token ").files,
+            None
+        );
     }
 }

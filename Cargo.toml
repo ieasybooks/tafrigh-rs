@@ -9,7 +9,7 @@ repository.workspace = true
 readme = "README.md"
 keywords.workspace = true
 categories = ["command-line-utilities", "multimedia::audio"]
-include = ["src/**", "Cargo.toml", "README.md", "LICENSE"]
+include = ["src/**", "docs/**", "Cargo.toml", "README.md", "LICENSE"]
 
 [[bin]]
 name = "tafrigh"
@@ -20,12 +20,17 @@ doc = false
 tafrigh = { path = "crates/tafrigh", version = "0.0.1" }
 tafrigh-wit = { path = "crates/tafrigh-wit", version = "0.0.1" }
 anyhow.workspace = true
-clap.workspace = true
 indicatif.workspace = true
 shell-words.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+usage-rs = { version = "7.1.0", features = ["completions", "response-files"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+wiremock.workspace = true
+usage-rs = { version = "7.1.0", features = ["test"] }
 
 [lints]
 workspace = true
@@ -47,7 +52,6 @@ keywords = ["transcription", "speech-to-text", "subtitles", "wit-ai", "silero-va
 anyhow = "1.0.104"
 async-trait = "0.1.92"
 base64 = "0.23.1"
-clap = { version = "4.6.7", features = ["derive", "env", "wrap_help"] }
 csv = "1.4.0"
 futures = "0.3.34"
 indicatif = "0.18.6"

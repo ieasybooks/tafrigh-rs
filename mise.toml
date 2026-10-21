@@ -4,3 +4,4 @@ idiomatic_version_file_enable_tools = ["rust"]
 [tools]
 python = "3.12"
 uv = "0.13.1"
+usage = "7.1.0"

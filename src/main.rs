@@ -1,6 +1,7 @@
 //! `tafrigh`: transcribe audio, video and playlists into subtitles and text with Wit.ai.
 
 mod cli;
+mod command;
 mod setup;
 mod ui;
 
@@ -9,26 +10,43 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use clap::Parser;
 use tafrigh::output::OutputMode;
 use tafrigh::source::Input;
 use tafrigh::{ChunkedTranscriber, Event, Tafrigh};
 use tafrigh_wit::WitRecognizer;
 use tracing_subscriber::EnvFilter;
 
-use crate::cli::Args;
+use crate::cli::{Args, Command};
 use crate::ui::Ui;
 
-// Exit codes, also listed in the --help footer (`cli::HELP_FOOTER`): 0 success, 1 error,
-// 2 invalid arguments (clap's own code).
+// Exit codes, also declared in `cli` for the Usage spec and reference docs: 0 success, 1 error,
+// 2 invalid arguments (Usage's own code).
 /// The run finished, but some inputs or items failed.
 const EXIT_FAILURES: u8 = 3;
 /// Interrupted with Ctrl-C.
 const EXIT_INTERRUPTED: u8 = 130;
 
 fn main() -> ExitCode {
-    let args = Args::parse();
-    let output_mode = args.output.mode().unwrap_or_else(|err| err.exit());
+    let cli = match command::parse() {
+        Ok(cli) => cli,
+        Err(code) => return code,
+    };
+    let result = match cli.command {
+        Command::Transcribe(args) => return transcribe(*args),
+        Command::Completions(args) => command::completions(&args),
+        Command::Spec => command::spec(),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn transcribe(args: Args) -> ExitCode {
+    let output_mode = args.output.mode().expect("validated CLI output mode");
     let ui = Arc::new(Ui::new(args.quiet));
     init_logging(args.verbose, &ui);
 

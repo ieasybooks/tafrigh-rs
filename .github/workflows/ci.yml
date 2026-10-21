@@ -29,3 +29,11 @@ jobs:
       # The end-to-end tests decode audio with ffmpeg.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: cargo test --workspace --locked
+      - name: Install Usage CLI
+        uses: jdx/mise-action@v5.2.1
+        with:
+          install_args: usage
+      - name: Check generated CLI reference
+        run: |
+          sh scripts/cli-docs.sh
+          git diff --exit-code -- docs/
