@@ -7,9 +7,10 @@
 pub mod silero;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::Result;
-use crate::audio::seconds_to_samples;
+use crate::audio::duration_to_samples;
 
 /// A half-open range of samples `[start, end)` at [`crate::audio::SAMPLE_RATE`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,11 +73,13 @@ pub struct FixedWindows {
 }
 
 impl FixedWindows {
-    /// Windows of `window_seconds`; the last one may be shorter.
-    pub fn new(window_seconds: f64) -> Result<Self> {
-        let window = seconds_to_samples(window_seconds);
+    /// Windows of `window`; the last one may be shorter.
+    pub fn new(window: Duration) -> Result<Self> {
+        let window = duration_to_samples(window);
         if window == 0 {
-            return Err(crate::Error::Config("window must be positive".into()));
+            return Err(crate::Error::Config(
+                "the window must be at least one sample".into(),
+            ));
         }
         Ok(Self { window })
     }
@@ -132,7 +135,7 @@ impl SegmentationSession for FixedWindowsSession {
 /// Merging reduces the number of recognizer requests and gives each request more context, at
 /// the cost of coarser segments. Silence between merged spans is kept.
 #[derive(Debug, Clone)]
-pub struct Merger {
+pub(crate) struct Merger {
     max_len: usize,
     current: Option<SpeechSpan>,
 }
@@ -195,7 +198,7 @@ mod tests {
 
     #[test]
     fn fixed_windows_cover_everything() {
-        let segmenter = FixedWindows::new(1.0).unwrap();
+        let segmenter = FixedWindows::new(Duration::from_secs(1)).unwrap();
         let mut session = segmenter.begin().unwrap();
         let mut out = Vec::new();
         session.push(&vec![0.0; 20_000], &mut out).unwrap();

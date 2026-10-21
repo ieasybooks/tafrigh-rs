@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io::{self, Write};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::Segment;
 
@@ -51,7 +52,7 @@ pub enum BuiltinFormat {
 
 impl BuiltinFormat {
     /// Segment-level formats.
-    pub const ALL: [Self; 6] = [
+    pub const SEGMENT_LEVEL: [Self; 6] = [
         Self::Txt,
         Self::Srt,
         Self::Vtt,
@@ -61,7 +62,7 @@ impl BuiltinFormat {
     ];
 
     /// Word-level formats.
-    pub const WORDS: [Self; 5] = [
+    pub const WORD_LEVEL: [Self; 5] = [
         Self::WordsSrt,
         Self::WordsVtt,
         Self::WordsCsv,
@@ -100,7 +101,13 @@ impl BuiltinFormat {
 
     /// True for the `Words*` formats.
     pub fn is_word_level(self) -> bool {
-        Self::WORDS.contains(&self)
+        Self::WORD_LEVEL.contains(&self)
+    }
+}
+
+impl From<BuiltinFormat> for Arc<dyn Format> {
+    fn from(format: BuiltinFormat) -> Self {
+        Arc::new(format)
     }
 }
 
@@ -114,12 +121,12 @@ impl FromStr for BuiltinFormat {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let mut all = Self::ALL.into_iter().chain(Self::WORDS);
+        let mut all = Self::SEGMENT_LEVEL.into_iter().chain(Self::WORD_LEVEL);
         all.find(|f| f.name().eq_ignore_ascii_case(value))
             .ok_or_else(|| {
-                let names: Vec<&str> = Self::ALL
+                let names: Vec<&str> = Self::SEGMENT_LEVEL
                     .iter()
-                    .chain(&Self::WORDS)
+                    .chain(&Self::WORD_LEVEL)
                     .map(|f| f.name())
                     .collect();
                 format!(
@@ -260,8 +267,8 @@ fn write_srt<'a>(
             out,
             "{}\n{} --> {}\n{}\n",
             i + 1,
-            format_timestamp(start, true, ','),
-            format_timestamp(end, true, ','),
+            srt_timestamp(start),
+            srt_timestamp(end),
             text
         )?;
     }
@@ -277,26 +284,39 @@ fn write_vtt<'a>(
         writeln!(
             out,
             "{} --> {}\n{}\n",
-            format_timestamp(start, false, '.'),
-            format_timestamp(end, false, '.'),
+            vtt_timestamp(start),
+            vtt_timestamp(end),
             text
         )?;
     }
     Ok(())
 }
 
-/// Formats seconds as `HH:MM:SS<sep>mmm`; hours are omitted when zero unless `always_hours`.
-pub fn format_timestamp(seconds: f64, always_hours: bool, separator: char) -> String {
-    let total_ms = (seconds.max(0.0) * 1000.0).round() as u64;
-    let hours = total_ms / 3_600_000;
-    let minutes = total_ms / 60_000 % 60;
-    let secs = total_ms / 1000 % 60;
-    let ms = total_ms % 1000;
-    if always_hours || hours > 0 {
-        format!("{hours:02}:{minutes:02}:{secs:02}{separator}{ms:03}")
+/// `HH:MM:SS,mmm`, as in SRT.
+pub(super) fn srt_timestamp(seconds: f64) -> String {
+    let (hours, minutes, secs, ms) = clock(seconds);
+    format!("{hours:02}:{minutes:02}:{secs:02},{ms:03}")
+}
+
+/// `MM:SS.mmm`, or `HH:MM:SS.mmm` from the first hour on, as in VTT.
+fn vtt_timestamp(seconds: f64) -> String {
+    let (hours, minutes, secs, ms) = clock(seconds);
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{secs:02}.{ms:03}")
     } else {
-        format!("{minutes:02}:{secs:02}{separator}{ms:03}")
+        format!("{minutes:02}:{secs:02}.{ms:03}")
     }
+}
+
+/// Hours, minutes, seconds and milliseconds in `seconds`, rounded to the millisecond.
+fn clock(seconds: f64) -> (u64, u64, u64, u64) {
+    let total_ms = (seconds.max(0.0) * 1000.0).round() as u64;
+    (
+        total_ms / 3_600_000,
+        total_ms / 60_000 % 60,
+        total_ms / 1000 % 60,
+        total_ms % 1000,
+    )
 }
 
 #[cfg(test)]
@@ -311,9 +331,10 @@ mod tests {
 
     #[test]
     fn timestamps() {
-        assert_eq!(format_timestamp(3725.4567, true, ','), "01:02:05,457");
-        assert_eq!(format_timestamp(65.5, false, '.'), "01:05.500");
-        assert_eq!(format_timestamp(0.0, true, ','), "00:00:00,000");
+        assert_eq!(srt_timestamp(3725.4567), "01:02:05,457");
+        assert_eq!(srt_timestamp(0.0), "00:00:00,000");
+        assert_eq!(vtt_timestamp(65.5), "01:05.500");
+        assert_eq!(vtt_timestamp(3725.4567), "01:02:05.457");
     }
 
     #[test]

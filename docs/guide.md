@@ -166,7 +166,7 @@ let transcriber = ChunkedTranscriber::new(segmenter, recognizer, ChunkOptions::d
 let segments = transcriber.transcribe("lecture.mp3".as_ref(), &NoProgress).await?;
 ```
 
-To process files, folders and URLs into transcript files, use `tafrigh::Tafrigh::builder`. The library retains flat output by default; use `.output_mode(tafrigh::output::OutputMode::TreeToTree)` or `SideBySide` to choose another layout, and `.recursive(true)` to include subdirectories.
+To process files, folders and URLs into transcript files, use `tafrigh::Tafrigh::builder`. The library writes flat output into the current directory by default; use `.output_mode(OutputMode::TreeToTree(dir))`, `OutputMode::Flat(dir)` or `OutputMode::SideBySide` to choose another layout, `.output(OutputWriter::new().formats([BuiltinFormat::Srt]))` to choose formats, and `.recursive(true)` to include subdirectories.
 
 For captions, construct `tafrigh_youtube::YoutubeCaptions` and pass it to `Tafrigh::captions`, then configure the same output writer and yt-dlp options. Its `run` method accepts YouTube URLs and reports per-item failures through the same `RunReport`.
 

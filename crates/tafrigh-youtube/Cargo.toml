@@ -16,7 +16,7 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["fs", "process"] }
+tokio = { workspace = true, features = ["fs"] }
 
 [lints]
 workspace = true

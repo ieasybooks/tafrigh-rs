@@ -2,11 +2,12 @@ use std::path::{Path, PathBuf};
 
 use rand::seq::SliceRandom;
 
+use super::format::srt_timestamp;
 use crate::{Error, Result, Segment};
 
 /// One segment of a run, with where it came from.
 #[derive(Debug, Clone)]
-pub struct SampleRow {
+pub(crate) struct SampleRow {
     /// The (compacted) segment.
     pub segment: Segment,
     /// Item id it belongs to.
@@ -19,7 +20,7 @@ pub struct SampleRow {
 
 /// Keeps a fixed-size random sample of rows using reservoir sampling.
 #[derive(Debug, Default)]
-pub struct SampleReservoir {
+pub(crate) struct SampleReservoir {
     capacity: usize,
     seen: usize,
     rows: Vec<SampleRow>,
@@ -56,15 +57,10 @@ impl SampleReservoir {
     pub fn rows(&self) -> &[SampleRow] {
         &self.rows
     }
-
-    /// Takes ownership of the rows currently retained by the reservoir.
-    pub fn into_rows(self) -> Vec<SampleRow> {
-        self.rows
-    }
 }
 
 /// Writes `count` randomly chosen rows to a CSV file for spot-checking transcripts.
-pub fn write_sample(path: &Path, rows: &[SampleRow], count: usize) -> Result<()> {
+pub(crate) fn write_sample(path: &Path, rows: &[SampleRow], count: usize) -> Result<()> {
     let mut picked: Vec<&SampleRow> = rows.iter().collect();
     picked.shuffle(&mut rand::rng());
     picked.truncate(count);
@@ -81,8 +77,8 @@ pub fn write_sample(path: &Path, rows: &[SampleRow], count: usize) -> Result<()>
         for row in picked {
             writer.write_record([
                 row.item.as_str(),
-                &super::format_timestamp(row.segment.start, true, ','),
-                &super::format_timestamp(row.segment.end, true, ','),
+                &srt_timestamp(row.segment.start),
+                &srt_timestamp(row.segment.end),
                 row.segment.text.trim(),
                 &row.link
                     .as_deref()
@@ -165,7 +161,7 @@ mod tests {
         let mut reservoir = SampleReservoir::new(4);
         reservoir.push(row(0));
         reservoir.push(row(1));
-        let rows = reservoir.into_rows();
+        let rows = reservoir.rows();
         assert_eq!(rows.len(), 2);
         assert_eq!(
             rows.iter()

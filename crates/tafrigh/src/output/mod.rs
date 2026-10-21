@@ -9,18 +9,17 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub use compact::compact;
-pub use format::{BuiltinFormat, Format, format_timestamp};
+use compact::compact;
+pub use format::{BuiltinFormat, Format};
 pub use layout::OutputMode;
 pub(crate) use layout::{Layout, Target, unique_name};
-pub use sample::{SampleReservoir, SampleRow, write_sample};
+pub(crate) use sample::{SampleReservoir, SampleRow, write_sample};
 
 use crate::{Error, Result, Segment};
 
-/// Writes transcripts for media items into a directory, one file per format.
+/// Writes an item's transcripts, one file per format.
 #[derive(Debug, Clone)]
 pub struct OutputWriter {
-    dir: PathBuf,
     formats: Vec<Arc<dyn Format>>,
     min_words: usize,
     keep_uncompacted: bool,
@@ -35,25 +34,34 @@ pub struct Written {
     pub segments: Vec<Segment>,
 }
 
+impl Default for OutputWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OutputWriter {
-    /// All segment-level built-in formats ([`BuiltinFormat::ALL`]), compaction to at least one
-    /// word per segment.
-    pub fn new(dir: impl Into<PathBuf>) -> Self {
+    /// All segment-level built-in formats ([`BuiltinFormat::SEGMENT_LEVEL`]), compaction to at
+    /// least one word per segment.
+    pub fn new() -> Self {
         Self {
-            dir: dir.into(),
-            formats: BuiltinFormat::ALL
-                .iter()
-                .map(|f| Arc::new(*f) as Arc<dyn Format>)
+            formats: BuiltinFormat::SEGMENT_LEVEL
+                .into_iter()
+                .map(Into::into)
                 .collect(),
             min_words: 1,
             keep_uncompacted: false,
         }
     }
 
-    /// Formats to write, replacing the defaults.
+    /// Formats to write, replacing the defaults: [`BuiltinFormat`]s, or your own [`Format`]s
+    /// as `Arc<dyn Format>`.
     #[must_use]
-    pub fn formats(mut self, formats: impl IntoIterator<Item = Arc<dyn Format>>) -> Self {
-        self.formats = formats.into_iter().collect();
+    pub fn formats<F: Into<Arc<dyn Format>>>(
+        mut self,
+        formats: impl IntoIterator<Item = F>,
+    ) -> Self {
+        self.formats = formats.into_iter().map(Into::into).collect();
         self
     }
 
@@ -76,36 +84,24 @@ impl OutputWriter {
         self.formats.iter().any(|format| format.needs_words())
     }
 
-    /// The output directory.
-    pub fn dir(&self) -> &Path {
-        &self.dir
+    /// Every file [`write`](Self::write) produces for `id` in `dir`.
+    pub fn outputs(&self, dir: &Path, id: &str) -> Vec<PathBuf> {
+        self.targets(dir, id).map(|(path, _, _)| path).collect()
     }
 
-    /// Use another directory with the same formats and compaction settings.
-    #[must_use]
-    pub fn in_dir(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.dir = dir.into();
-        self
-    }
-
-    /// Every file [`write`](Self::write) produces for `id`.
-    pub fn outputs(&self, id: &str) -> Vec<PathBuf> {
-        self.targets(id).map(|(path, _, _)| path).collect()
-    }
-
-    /// True when all outputs for `id` already exist.
-    pub fn exists(&self, id: &str) -> bool {
-        let outputs = self.outputs(id);
+    /// True when all outputs for `id` already exist in `dir`.
+    pub fn exists(&self, dir: &Path, id: &str) -> bool {
+        let outputs = self.outputs(dir, id);
         !outputs.is_empty() && outputs.iter().all(|path| path.is_file())
     }
 
-    /// Writes all formats atomically.
-    pub fn write(&self, id: &str, segments: &[Segment]) -> Result<Written> {
-        std::fs::create_dir_all(&self.dir)
-            .map_err(|err| Error::io(format!("creating {}", self.dir.display()), err))?;
+    /// Writes every format for `id` into `dir`, each file atomically.
+    pub fn write(&self, dir: &Path, id: &str, segments: &[Segment]) -> Result<Written> {
+        std::fs::create_dir_all(dir)
+            .map_err(|err| Error::io(format!("creating {}", dir.display()), err))?;
         let compacted = compact(segments, self.min_words);
         let mut files = Vec::new();
-        for (path, format, uncompacted) in self.targets(id) {
+        for (path, format, uncompacted) in self.targets(dir, id) {
             let content = if uncompacted { segments } else { &compacted };
             write_atomic(&path, |out| format.write(content, out))?;
             files.push(path);
@@ -116,22 +112,22 @@ impl OutputWriter {
         })
     }
 
-    /// `(path, format, uncompacted)` for every file written for `id`.
+    /// `(path, format, uncompacted)` for every file written for `id` in `dir`.
     fn targets<'a>(
         &'a self,
+        dir: &'a Path,
         id: &'a str,
     ) -> impl Iterator<Item = (PathBuf, &'a Arc<dyn Format>, bool)> + 'a {
         let uncompacted = self.keep_uncompacted && self.min_words > 0;
         self.formats.iter().flat_map(move |format| {
             let main = (
-                self.dir.join(format!("{id}.{}", format.extension())),
+                dir.join(format!("{id}.{}", format.extension())),
                 format,
                 false,
             );
             let extra = uncompacted.then(|| {
                 (
-                    self.dir
-                        .join(format!("{id}.uncompacted.{}", format.extension())),
+                    dir.join(format!("{id}.uncompacted.{}", format.extension())),
                     format,
                     true,
                 )
@@ -141,14 +137,19 @@ impl OutputWriter {
     }
 }
 
+/// The temporary file [`write_atomic`] writes before renaming it to `path`.
+fn tmp_path(path: &Path) -> PathBuf {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    tmp.into()
+}
+
 /// Writes through a temporary file and renames it, so readers never see partial files.
 fn write_atomic(
     path: &Path,
     write: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
 ) -> Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
+    let tmp = tmp_path(path);
     let result = (|| {
         let file = std::fs::File::create(&tmp)?;
         let mut out = std::io::BufWriter::new(file);
@@ -170,18 +171,19 @@ mod tests {
 
     #[test]
     fn writes_every_target_atomically() {
-        let dir = std::env::temp_dir().join(format!("tafrigh-output-{}", std::process::id()));
-        let writer = OutputWriter::new(&dir)
-            .formats([Arc::new(BuiltinFormat::Txt) as Arc<dyn Format>])
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("out");
+        let writer = OutputWriter::new()
+            .formats([BuiltinFormat::Txt])
             .min_words(2)
             .keep_uncompacted(true);
         let segments = [
             Segment::new(0.0, 1.0, "one"),
             Segment::new(1.0, 2.0, "two words"),
         ];
-        assert!(!writer.exists("x"));
+        assert!(!writer.exists(&dir, "x"));
 
-        let written = writer.write("x", &segments).unwrap();
+        let written = writer.write(&dir, "x", &segments).unwrap();
         assert_eq!(
             written.files,
             [dir.join("x.txt"), dir.join("x.uncompacted.txt")]
@@ -195,8 +197,7 @@ mod tests {
             std::fs::read_to_string(dir.join("x.uncompacted.txt")).unwrap(),
             "one\ntwo words\n"
         );
-        assert!(writer.exists("x"));
+        assert!(writer.exists(&dir, "x"));
         assert!(!dir.join("x.txt.tmp").exists());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

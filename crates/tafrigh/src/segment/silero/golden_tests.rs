@@ -1,14 +1,11 @@
 //! Golden tests against the Python reference (silero-vad 6.2.1's `get_speech_timestamps` and
 //! onnxruntime). Regenerate fixtures with `tests/fixtures/generate.py`.
-#![cfg(feature = "silero")]
 
 use base64::Engine;
 use serde_json::Value;
-use tafrigh::segment::silero::{
-    SileroConfig, SileroModel, SileroSegmenter, StreamingTimestamps, TimestampParams,
-    speech_timestamps,
-};
-use tafrigh::segment::{Segmenter, SpeechSpan};
+
+use super::timestamps::speech_timestamps;
+use super::*;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
@@ -123,10 +120,10 @@ fn segmenter_matches_python_end_to_end() {
     let p = params(&golden["short"]["params"]);
     let config = SileroConfig {
         threshold: p.threshold,
-        min_speech_ms: p.min_speech_ms,
-        max_speech_s: p.max_speech_s,
-        min_silence_ms: p.min_silence_ms,
-        speech_pad_ms: p.speech_pad_ms,
+        min_speech: Duration::from_millis(p.min_speech_ms.into()),
+        max_speech: Duration::from_secs_f64(p.max_speech_s),
+        min_silence: Duration::from_millis(p.min_silence_ms.into()),
+        speech_pad: Duration::from_millis(p.speech_pad_ms.into()),
     };
     let segmenter = SileroSegmenter::new(config).unwrap();
     let mut session = segmenter.begin().unwrap();

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use tafrigh::output::{BuiltinFormat, Format, OutputMode, OutputWriter};
+use tafrigh::output::{BuiltinFormat, OutputMode, OutputWriter};
 use tafrigh::source::Input;
 use tafrigh::{
     Event, ItemStatus, NoProgress, Progress, Result, Segment, Tafrigh, TranscribeEvent, Transcriber,
@@ -35,8 +35,8 @@ fn media(root: &Path, name: &str, text: &str) -> PathBuf {
     path
 }
 
-fn writer(dir: &Path) -> OutputWriter {
-    OutputWriter::new(dir).formats([Arc::new(BuiltinFormat::Txt) as Arc<dyn Format>])
+fn writer() -> OutputWriter {
+    OutputWriter::new().formats([BuiltinFormat::Txt])
 }
 
 fn assert_text(path: &Path, text: &str) {
@@ -58,15 +58,17 @@ async fn long_media_names_are_written_and_skipped_on_retry() {
     ] {
         let name = character.repeat(count);
         assert_eq!(name.len(), bytes);
-        for mode in [
-            OutputMode::SideBySide,
+        let modes: [fn(PathBuf) -> OutputMode; 3] = [
+            |_| OutputMode::SideBySide,
             OutputMode::TreeToTree,
             OutputMode::Flat,
-        ] {
+        ];
+        for mode in modes {
             let temp = tempfile::tempdir().unwrap();
             let root = temp.path();
             let input = media(root, &format!("in/{name}.mp3"), "long recording");
             let out = root.join("out");
+            let mode = mode(out.clone());
             let destination = if mode == OutputMode::SideBySide {
                 root.join("in")
             } else {
@@ -74,8 +76,8 @@ async fn long_media_names_are_written_and_skipped_on_retry() {
             };
             let transcriber = Arc::new(RecordingTranscriber::default());
             let pipeline = Tafrigh::builder(transcriber.clone())
-                .output(writer(&out))
-                .output_mode(mode)
+                .output(writer())
+                .output_mode(mode.clone())
                 .skip_existing(true)
                 .build();
             let initial = pipeline
@@ -113,8 +115,8 @@ async fn failed_discovery_keeps_tree_root_names_on_retry() {
     std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
     let transcriber = Arc::new(RecordingTranscriber::default());
     let pipeline = Tafrigh::builder(transcriber.clone())
-        .output(writer(&root.join("out")))
-        .output_mode(OutputMode::TreeToTree)
+        .output(writer())
+        .output_mode(OutputMode::TreeToTree(root.join("out")))
         .recursive(true)
         .skip_existing(true)
         .build();
@@ -157,8 +159,8 @@ async fn mirrored_directories_take_precedence_in_both_discovery_orders() {
         media(root, &format!("in/a.{extension}"), "top recording");
         media(root, "in/a.txt/b.mp3", "nested recording");
         let pipeline = Tafrigh::builder(RecordingTranscriber::default())
-            .output(writer(&root.join("out")))
-            .output_mode(OutputMode::TreeToTree)
+            .output(writer())
+            .output_mode(OutputMode::TreeToTree(root.join("out")))
             .recursive(true)
             .skip_existing(true)
             .build();
@@ -199,8 +201,8 @@ async fn directories_from_later_inputs_are_reserved_before_any_files() {
             inputs.reverse();
         }
         let report = Tafrigh::builder(RecordingTranscriber::default())
-            .output(writer(&root.join("out")))
-            .output_mode(OutputMode::TreeToTree)
+            .output(writer())
+            .output_mode(OutputMode::TreeToTree(root.join("out")))
             .build()
             .run(inputs, &NoProgress)
             .await
@@ -218,11 +220,8 @@ async fn side_by_side_preserves_directories_for_every_output_variant() {
         let root = temp.path();
         let input = media(root, "a.mp3", "recording");
         std::fs::create_dir(root.join(directory)).unwrap();
-        let output = OutputWriter::new(root)
-            .formats([
-                Arc::new(BuiltinFormat::Srt) as Arc<dyn Format>,
-                Arc::new(BuiltinFormat::WordsSrt),
-            ])
+        let output = OutputWriter::new()
+            .formats([BuiltinFormat::Srt, BuiltinFormat::WordsSrt])
             .keep_uncompacted(true);
         let report = Tafrigh::builder(RecordingTranscriber::default())
             .output(output)
@@ -254,11 +253,8 @@ async fn sample_report_avoids_mirrored_directories_and_transcripts() {
             media(root, "in/sample.mp3", "sample recording");
         }
         let report = Tafrigh::builder(RecordingTranscriber::default())
-            .output(
-                OutputWriter::new(root.join("out"))
-                    .formats([Arc::new(BuiltinFormat::Csv) as Arc<dyn Format>]),
-            )
-            .output_mode(OutputMode::TreeToTree)
+            .output(OutputWriter::new().formats([BuiltinFormat::Csv]))
+            .output_mode(OutputMode::TreeToTree(root.join("out")))
             .recursive(true)
             .sample(3)
             .build()
@@ -302,8 +298,8 @@ async fn unusable_item_destination_does_not_abort_the_batch() {
         _ => {}
     };
     let report = Tafrigh::builder(transcriber.clone())
-        .output(writer(&root.join("out")))
-        .output_mode(OutputMode::TreeToTree)
+        .output(writer())
+        .output_mode(OutputMode::TreeToTree(root.join("out")))
         .recursive(true)
         .build()
         .run([Input::Path(root.join("in"))], &collect)
@@ -330,12 +326,11 @@ async fn existing_outputs_are_skipped_only_when_all_requested_files_exist() {
     let txt = media(root, "out/talk.txt", "existing text");
     let srt = media(root, "out/talk.srt", "existing subtitles");
     let transcriber = Arc::new(RecordingTranscriber::default());
-    let output = OutputWriter::new(root.join("out")).formats([
-        Arc::new(BuiltinFormat::Txt) as Arc<dyn Format>,
-        Arc::new(BuiltinFormat::Srt),
-    ]);
+    let output = OutputWriter::new().formats([BuiltinFormat::Txt, BuiltinFormat::Srt]);
+    let flat = OutputMode::Flat(root.join("out"));
     let pipeline = Tafrigh::builder(transcriber.clone())
         .output(output.clone())
+        .output_mode(flat.clone())
         .skip_existing(true)
         .build();
     let report = pipeline
@@ -367,6 +362,7 @@ async fn existing_outputs_are_skipped_only_when_all_requested_files_exist() {
     std::fs::write(&input, "updated recording").unwrap();
     let report = Tafrigh::builder(transcriber.clone())
         .output(output)
+        .output_mode(flat)
         .build()
         .run([Input::Path(input)], &NoProgress)
         .await

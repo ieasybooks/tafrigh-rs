@@ -1,35 +1,47 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
-use super::OutputWriter;
+use super::{OutputWriter, tmp_path};
 use crate::source::{Input, Media, MediaItem};
 use crate::{Error, Result};
 
-/// How a run places transcripts relative to its inputs.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Where a run puts transcripts. Defaults to flat output in the current directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutputMode {
     /// Beside each local or downloaded media file.
     SideBySide,
-    /// Mirror input directories under the output directory, with all formats together.
-    TreeToTree,
-    /// Put every transcript directly in the output directory (the library default).
-    #[default]
-    Flat,
+    /// Mirror input directories under this directory, with all formats together. Several
+    /// directory inputs are kept apart by name; files and URLs go directly in it.
+    TreeToTree(PathBuf),
+    /// Put every transcript directly in this directory.
+    Flat(PathBuf),
+}
+
+impl Default for OutputMode {
+    fn default() -> Self {
+        Self::Flat(PathBuf::from("."))
+    }
+}
+
+impl OutputMode {
+    /// The output directory; `None` in side-by-side mode.
+    pub fn dir(&self) -> Option<&Path> {
+        match self {
+            Self::SideBySide => None,
+            Self::TreeToTree(dir) | Self::Flat(dir) => Some(dir),
+        }
+    }
 }
 
 /// One item's destination, independent of its progress ID and download ID.
 pub(crate) struct Target {
-    pub writer: OutputWriter,
+    pub dir: PathBuf,
     pub name: String,
 }
 
 impl Target {
-    pub fn exists(&self) -> bool {
-        self.writer.exists(&self.name)
-    }
-
-    pub fn write(&self, segments: &[crate::Segment]) -> Result<super::Written> {
-        self.writer.write(&self.name, segments)
+    pub fn exists(&self, writer: &OutputWriter) -> bool {
+        writer.exists(&self.dir, &self.name)
     }
 }
 
@@ -54,13 +66,16 @@ impl Layout {
         let roots: Vec<_> = inputs
             .iter()
             .map(|input| {
+                let OutputMode::TreeToTree(output_dir) = &mode else {
+                    return None;
+                };
                 let Input::Path(path) = input else {
                     return None;
                 };
-                if mode != OutputMode::TreeToTree || !path.is_dir() {
+                if !path.is_dir() {
                     return None;
                 }
-                let mut destination = writer.dir().to_owned();
+                let mut destination = output_dir.clone();
                 if separate_roots {
                     let root = path.canonicalize().unwrap_or_else(|_| path.clone());
                     let name = root
@@ -91,19 +106,21 @@ impl Layout {
 
     /// Remote side-by-side destinations are known only after downloading.
     pub fn directory(&self, item: &MediaItem, input: usize) -> Option<PathBuf> {
-        Some(match (self.mode, &item.media) {
+        Some(match (&self.mode, &item.media) {
             (OutputMode::SideBySide, Media::Remote { .. }) => return None,
             (OutputMode::SideBySide, Media::File(path)) => parent(path).to_owned(),
-            (OutputMode::TreeToTree, Media::File(path)) => match &self.roots[input] {
+            (OutputMode::TreeToTree(output_dir), Media::File(path)) => match &self.roots[input] {
                 Some((source, destination)) => {
                     let relative = path
                         .strip_prefix(source)
                         .expect("discovered file is inside its input root");
                     destination.join(parent(relative))
                 }
-                None => self.writer.dir().to_owned(),
+                None => output_dir.clone(),
             },
-            _ => self.writer.dir().to_owned(),
+            (OutputMode::TreeToTree(output_dir) | OutputMode::Flat(output_dir), _) => {
+                output_dir.clone()
+            }
         })
     }
 
@@ -127,49 +144,41 @@ impl Layout {
         self.reserve(&dir, &name)
     }
 
+    /// Finds a name whose files are all free in `dir`, then reserves those files.
     fn reserve(&mut self, dir: &Path, name: &str) -> Result<Target> {
-        let writer = self.writer.clone().in_dir(normalize_dir(dir)?);
+        let dir = normalize_dir(dir)?;
+        let writer = &self.writer;
+        // Atomic writes need temporary files as well as their final destinations.
+        let files = |name: &str| {
+            let outputs = writer.outputs(&dir, name);
+            let temporary: Vec<_> = outputs.iter().map(|path| tmp_path(path)).collect();
+            outputs.into_iter().chain(temporary).collect::<Vec<_>>()
+        };
         let name = unique_name(name, |candidate| {
-            let outputs = writer.outputs(candidate);
-            // Atomic writes need temporary files as well as their final destinations.
-            let mut paths = outputs.clone();
-            paths.extend(outputs.iter().map(|path| {
-                let mut tmp = path.as_os_str().to_owned();
-                tmp.push(".tmp");
-                PathBuf::from(tmp)
-            }));
-            if paths.iter().any(|path| {
-                self.reserved.contains(&path_key(path))
-                    || self.directories.contains(&path_key(path))
-                    || path.is_dir()
-            }) {
-                return false;
-            }
-            self.reserved
-                .extend(paths.iter().map(|path| path_key(path)));
-            true
+            files(candidate).iter().all(|path| self.is_free(path))
         });
-        Ok(Target { writer, name })
+        self.reserved
+            .extend(files(&name).iter().map(|path| path_key(path)));
+        Ok(Target { dir, name })
+    }
+
+    /// Whether nothing in this run and no existing directory uses `path`.
+    fn is_free(&self, path: &Path) -> bool {
+        let key = path_key(path);
+        !self.reserved.contains(&key) && !self.directories.contains(&key) && !path.is_dir()
     }
 
     /// The sample report is allocated last so it cannot replace a transcript or directory.
     pub fn sample_path(&self) -> Result<PathBuf> {
-        let dir = normalize_dir(if self.mode == OutputMode::SideBySide {
-            Path::new(".")
-        } else {
-            self.writer.dir()
-        })?;
-        let name = unique_name("sample", |name| {
-            let path = dir.join(format!("{name}.csv"));
-            !self.reserved.contains(&path_key(&path))
-                && !self.directories.contains(&path_key(&path))
-                && !path.is_dir()
-        });
-        Ok(dir.join(format!("{name}.csv")))
+        let dir = normalize_dir(self.mode.dir().unwrap_or(Path::new(".")))?;
+        let path = |name: &str| dir.join(format!("{name}.csv"));
+        let name = unique_name("sample", |name| self.is_free(&path(name)));
+        Ok(path(&name))
     }
 }
 
-/// Claim the original name, or the first available numeric suffix.
+/// Returns `name` when `claim` accepts it, otherwise the first of `name-2`, `name-3`, …
+/// that it accepts.
 pub(crate) fn unique_name(name: &str, mut claim: impl FnMut(&str) -> bool) -> String {
     let mut candidate = name.to_owned();
     let mut suffix = 2;
@@ -227,10 +236,8 @@ fn path_key(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-    use crate::output::{BuiltinFormat, Format};
+    use crate::output::BuiltinFormat;
 
     #[test]
     fn directory_roots_are_reserved_before_any_discovery() {
@@ -240,10 +247,9 @@ mod tests {
         std::fs::create_dir(&first).unwrap();
         std::fs::create_dir(&second).unwrap();
         let out = temp.path().join("out");
-        let writer =
-            OutputWriter::new(&out).formats([Arc::new(BuiltinFormat::Txt) as Arc<dyn Format>]);
+        let writer = OutputWriter::new().formats([BuiltinFormat::Txt]);
         let mut layout = Layout::new(
-            OutputMode::TreeToTree,
+            OutputMode::TreeToTree(out.clone()),
             writer,
             &[Input::Path(first), Input::Path(second)],
         );
@@ -254,14 +260,14 @@ mod tests {
     fn reserves_every_format_and_variant_only_in_its_destination() {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path();
-        let writer = OutputWriter::new(dir)
+        let writer = OutputWriter::new()
             .formats([
-                Arc::new(BuiltinFormat::Srt) as Arc<dyn Format>,
-                Arc::new(BuiltinFormat::WordsSrt),
-                Arc::new(BuiltinFormat::Csv),
+                BuiltinFormat::Srt,
+                BuiltinFormat::WordsSrt,
+                BuiltinFormat::Csv,
             ])
             .keep_uncompacted(true);
-        let mut layout = Layout::new(OutputMode::Flat, writer, &[]);
+        let mut layout = Layout::new(OutputMode::Flat(dir.to_owned()), writer, &[]);
         for (name, expected) in [
             ("foo", "foo"),
             ("foo", "foo-2"),
@@ -292,14 +298,14 @@ mod tests {
         let alias = temp.path().join("alias");
         std::fs::create_dir(&real).unwrap();
         std::os::unix::fs::symlink(&real, &alias).unwrap();
-        let mut layout = Layout::new(OutputMode::Flat, OutputWriter::new(&real), &[]);
+        let mut layout = Layout::new(OutputMode::Flat(real.clone()), OutputWriter::new(), &[]);
         assert_eq!(layout.reserve(&real.join("new"), "a").unwrap().name, "a");
         assert_eq!(layout.reserve(&alias.join("new"), "a").unwrap().name, "a-2");
     }
 
     #[test]
     fn side_by_side_sample_is_in_the_working_directory() {
-        let layout = Layout::new(OutputMode::SideBySide, OutputWriter::new("ignored"), &[]);
+        let layout = Layout::new(OutputMode::SideBySide, OutputWriter::new(), &[]);
         assert_eq!(
             layout.sample_path().unwrap(),
             std::env::current_dir()

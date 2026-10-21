@@ -53,8 +53,8 @@ pub enum Error {
     },
 
     /// The voice activity model failed.
-    #[error("voice activity detection failed: {0}")]
-    Vad(String),
+    #[error("voice activity detection failed")]
+    Vad(#[source] BoxError),
 
     /// A chunk failed after the recognizer's own retries.
     #[error("chunk #{index} ({start:.2}s–{end:.2}s) could not be recognized")]
@@ -73,6 +73,16 @@ pub enum Error {
     /// An input could not be resolved or downloaded.
     #[error("{0}")]
     Source(String),
+
+    /// Output of an external program or service could not be understood.
+    #[error("{context}")]
+    Parse {
+        /// What was being parsed.
+        context: String,
+        /// Why parsing failed.
+        #[source]
+        source: BoxError,
+    },
 
     /// Options are inconsistent or out of range.
     #[error("invalid configuration: {0}")]
@@ -110,12 +120,32 @@ impl fmt::Display for ErrorChain<'_> {
     }
 }
 
+/// The outcome of a spawned task: its panic is resumed, and cancellation becomes
+/// [`Error::Cancelled`].
+pub(crate) fn task_result<T>(
+    joined: std::result::Result<Result<T>, tokio::task::JoinError>,
+) -> Result<T> {
+    match joined {
+        Ok(result) => result,
+        Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
+        Err(_) => Err(Error::Cancelled),
+    }
+}
+
 impl Error {
     /// Adds context to an I/O error from the pipeline or a backend.
     pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
         Self::Io {
             context: context.into(),
             source,
+        }
+    }
+
+    /// Adds context to a parsing error from the pipeline or a backend.
+    pub fn parse(context: impl Into<String>, source: impl Into<BoxError>) -> Self {
+        Self::Parse {
+            context: context.into(),
+            source: source.into(),
         }
     }
 

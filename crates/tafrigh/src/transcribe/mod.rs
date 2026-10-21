@@ -3,6 +3,7 @@
 mod chunked;
 
 use std::path::Path;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -48,8 +49,8 @@ pub trait ChunkRecognizer: Send + Sync {
     /// `chunk.samples` (padding included). Implementations handle their own retries.
     async fn recognize(&self, chunk: &AudioChunk) -> Result<Recognition, BoxError>;
 
-    /// Longest audio (padding included) accepted per request, in seconds.
-    fn max_audio_duration(&self) -> Option<f64> {
+    /// Longest audio (padding included) accepted per request.
+    fn max_audio_duration(&self) -> Option<Duration> {
         None
     }
 
@@ -78,17 +79,6 @@ impl Recognition {
                 words: Vec::new(),
             }],
         }
-    }
-
-    /// All utterance texts joined with spaces.
-    pub fn joined_text(&self) -> String {
-        let parts: Vec<&str> = self
-            .utterances
-            .iter()
-            .map(|u| u.text.trim())
-            .filter(|t| !t.is_empty())
-            .collect();
-        parts.join(" ")
     }
 }
 
@@ -129,7 +119,7 @@ impl<T: ChunkRecognizer + ?Sized> ChunkRecognizer for std::sync::Arc<T> {
         (**self).recognize(chunk).await
     }
 
-    fn max_audio_duration(&self) -> Option<f64> {
+    fn max_audio_duration(&self) -> Option<Duration> {
         (**self).max_audio_duration()
     }
 

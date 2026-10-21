@@ -181,8 +181,8 @@ impl ChunkRecognizer for WitRecognizer {
         }
     }
 
-    fn max_audio_duration(&self) -> Option<f64> {
-        Some(self.config.max_audio())
+    fn max_audio_duration(&self) -> Option<Duration> {
+        Some(self.config.audio_limit())
     }
 
     fn max_in_flight(&self) -> usize {

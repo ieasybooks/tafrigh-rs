@@ -7,8 +7,8 @@ use std::time::Duration;
 use tafrigh::audio::AudioChunk;
 use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
 use tafrigh::{
-    ChunkOptions, ChunkRecognizer, ChunkedTranscriber, Error, OnChunkError, TranscribeEvent,
-    Transcriber,
+    ChunkOptions, ChunkRecognizer, ChunkedTranscriber, Error, OnChunkError, Recognition,
+    TranscribeEvent, Transcriber,
 };
 use tafrigh_wit::{Endpoint, WitConfig, WitRecognizer};
 use wiremock::matchers::{header, method, path, query_param};
@@ -35,6 +35,16 @@ fn chunk(samples: usize) -> AudioChunk {
 }
 
 /// A dictation stream: one partial and one final transcription per `(text, start_ms, end_ms)`.
+/// All utterance texts joined with spaces.
+fn joined_text(recognition: &Recognition) -> String {
+    let texts: Vec<&str> = recognition
+        .utterances
+        .iter()
+        .map(|utterance| utterance.text.as_str())
+        .collect();
+    texts.join(" ")
+}
+
 fn dictation_stream(utterances: &[(&str, u64, u64)]) -> ResponseTemplate {
     let mut objects = Vec::new();
     for (text, start, end) in utterances {
@@ -105,7 +115,7 @@ async fn sends_wav_like_js_tafrigh_and_parses_utterances() {
         .await
         .unwrap();
     let recognition = recognizer.recognize(&chunk(1600)).await.unwrap();
-    assert_eq!(recognition.joined_text(), "hello there again");
+    assert_eq!(joined_text(&recognition), "hello there again");
     assert_eq!(recognition.utterances.len(), 2);
     assert!((recognition.utterances[1].words[0].end - 0.7).abs() < 1e-9);
 
@@ -137,7 +147,7 @@ async fn retries_rate_limits_and_server_errors() {
 
     let recognizer = WitRecognizer::new(config(&server, &["t"])).await.unwrap();
     let recognition = recognizer.recognize(&chunk(160)).await.unwrap();
-    assert_eq!(recognition.joined_text(), "finally");
+    assert_eq!(joined_text(&recognition), "finally");
     assert_eq!(server.received_requests().await.unwrap().len(), 3);
 }
 
@@ -175,7 +185,7 @@ async fn rate_limits_do_not_use_up_attempts() {
     config.max_attempts = 1;
     let recognizer = WitRecognizer::new(config).await.unwrap();
     let recognition = recognizer.recognize(&chunk(160)).await.unwrap();
-    assert_eq!(recognition.joined_text(), "patience");
+    assert_eq!(joined_text(&recognition), "patience");
     assert_eq!(server.received_requests().await.unwrap().len(), 5);
 }
 
@@ -215,7 +225,7 @@ async fn retries_missing_body_responses() {
 
     let recognizer = WitRecognizer::new(config(&server, &["t"])).await.unwrap();
     let recognition = recognizer.recognize(&chunk(160)).await.unwrap();
-    assert_eq!(recognition.joined_text(), "arrived");
+    assert_eq!(joined_text(&recognition), "arrived");
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
@@ -240,7 +250,7 @@ async fn stalled_requests_time_out_by_audio_length() {
     let recognizer = WitRecognizer::new(config).await.unwrap();
     let started = std::time::Instant::now();
     let recognition = recognizer.recognize(&chunk(1600)).await.unwrap();
-    assert_eq!(recognition.joined_text(), "prompt");
+    assert_eq!(joined_text(&recognition), "prompt");
     assert!(
         started.elapsed() < Duration::from_secs(3),
         "{:?}",
@@ -359,7 +369,7 @@ async fn transcriber(server: &MockServer, options: ChunkOptions) -> ChunkedTrans
         .await
         .unwrap();
     let config = SileroConfig {
-        speech_pad_ms: 60,
+        speech_pad: Duration::from_millis(60),
         ..SileroConfig::default()
     };
     let segmenter = SileroSegmenter::new(config).unwrap();
@@ -411,7 +421,11 @@ async fn transcribes_real_audio_through_silero_and_wit() {
     assert!(
         matches!(events[0], TranscribeEvent::Started { duration: Some(d) } if (d - 11.0).abs() < 0.01)
     );
-    assert!(events.contains(&TranscribeEvent::Segmented { chunks: 4 }));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, TranscribeEvent::Segmented { chunks: 4 }))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -425,7 +439,10 @@ async fn merges_chunks_and_pads_with_lead_in() {
 
     let options = ChunkOptions {
         merge: true,
-        padding: Some(tafrigh::audio::Padding::white_noise(1.0, -30.0)),
+        padding: Some(tafrigh::audio::Padding::white_noise(
+            Duration::from_secs(1),
+            -30.0,
+        )),
         ..ChunkOptions::default()
     };
     let segments = transcriber(&server, options)
@@ -471,7 +488,7 @@ async fn resends_speech_the_recognizer_skipped() {
     // With 0.5s padding, the words leave 1.5s, 1.0s, 1.7s and 2.1s of the four chunks
     // uncovered: all but the second reach 1.2s and go out again.
     let options = ChunkOptions {
-        resend_gaps: Some(1.2),
+        resend_gaps: Some(Duration::from_millis(1200)),
         ..ChunkOptions::default()
     };
     let segments = transcriber(&server, options)
@@ -566,25 +583,26 @@ async fn chunk_failures_abort_or_skip() {
 #[tokio::test]
 async fn audio_limits_depend_on_the_endpoint() {
     let server = MockServer::start().await;
-    let options = |max_chunk_s| ChunkOptions {
-        max_chunk_s,
-        padding: Some(tafrigh::audio::Padding::silence(1.0)),
+    let options = |max_chunk| ChunkOptions {
+        max_chunk,
+        padding: Some(tafrigh::audio::Padding::silence(Duration::from_secs(1))),
         ..ChunkOptions::default()
     };
-    let build = |config: WitConfig, max_chunk_s| async move {
+    let build = |config: WitConfig, seconds| async move {
+        let max_chunk = Duration::from_secs(seconds);
         let recognizer = WitRecognizer::new(config).await.unwrap();
-        let segmenter = tafrigh::segment::FixedWindows::new(max_chunk_s).unwrap();
-        ChunkedTranscriber::new(segmenter, recognizer, options(max_chunk_s))
+        let segmenter = tafrigh::segment::FixedWindows::new(max_chunk).unwrap();
+        ChunkedTranscriber::new(segmenter, recognizer, options(max_chunk))
     };
 
     // Dictation: up to 60s per request.
-    assert!(build(config(&server, &["t"]), 58.0).await.is_ok());
-    let err = build(config(&server, &["t"]), 59.0).await.err().unwrap();
+    assert!(build(config(&server, &["t"]), 58).await.is_ok());
+    let err = build(config(&server, &["t"]), 59).await.err().unwrap();
     assert!(err.to_string().contains("60.00s limit"), "{err}");
 
     // Speech: up to 20s per request.
     let mut speech = config(&server, &["t"]);
     speech.endpoint = Endpoint::Speech;
-    let err = build(speech, 19.0).await.err().unwrap();
+    let err = build(speech, 19).await.err().unwrap();
     assert!(err.to_string().contains("20.00s limit"), "{err}");
 }

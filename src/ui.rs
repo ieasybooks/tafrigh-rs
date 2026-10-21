@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
-use tafrigh::{Event, RunReport, TranscribeEvent};
+use tafrigh::{ErrorChain, Event, RunReport, TranscribeEvent};
 use tracing_subscriber::fmt::MakeWriter;
 
 /// Progress bars plus result lines on stderr.
@@ -96,7 +96,7 @@ impl Ui {
             Event::InputFailed { error, .. } => {
                 state.clear_spinner();
                 drop(state);
-                self.line(format!("✗ {error}"));
+                self.line(format!("✗ {}", ErrorChain(&*error)));
             }
             Event::ItemStarted {
                 item,
@@ -144,10 +144,10 @@ impl Ui {
                     item.transcribe_event(&event);
                 }
             }
-            Event::ItemSkipped { item, reason } => {
+            Event::ItemSkipped { item } => {
                 state.clear_item(&item.id);
                 drop(state);
-                self.line(format!("↷ {} ({reason})", item.id));
+                self.line(format!("↷ {} (outputs exist)", item.id));
             }
             Event::ItemFinished { item, segments, .. } => {
                 state.clear_item(&item.id);
@@ -157,7 +157,7 @@ impl Ui {
             Event::ItemFailed { item, error } => {
                 state.clear_item(&item.id);
                 drop(state);
-                self.line(format!("✗ {}: {error}", item.id));
+                self.line(format!("✗ {}: {}", item.id, ErrorChain(&*error)));
             }
             _ => {}
         }

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -84,20 +85,45 @@ impl YtDlp {
 
     /// Lists the downloadable items behind `url`.
     pub async fn resolve(&self, url: &str) -> Result<Vec<MediaItem>> {
+        let command = self.with_defaults(
+            &["--flat-playlist", "--dump-single-json", "--ignore-errors"],
+            url,
+        );
+        let output = self.output(command, url, Failure::UnlessOutput).await?;
+        self.items(url, &output).await
+    }
+
+    /// Runs yt-dlp with the configured extra arguments followed by `args`, and returns its
+    /// standard output. `args` come last, so backends can enforce the options they rely on;
+    /// include `--` and the URL when the run needs one. `url` names the item in errors.
+    pub async fn run<I, S>(&self, args: I, url: &str) -> Result<Vec<u8>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.output(self.enforcing(args), url, Failure::Always)
+            .await
+    }
+
+    /// Lists the items behind `url` from a run with `args`, which must include
+    /// `--dump-single-json`. Like [`Self::resolve`], it skips unavailable entries, saves the
+    /// metadata when enabled, and accepts a failed run that still printed JSON, such as a
+    /// playlist with unavailable entries.
+    pub async fn list<I, S>(&self, args: I, url: &str) -> Result<Vec<MediaItem>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         let output = self
-            .run(
-                ["--flat-playlist", "--dump-single-json", "--ignore-errors"],
-                url,
-            )
+            .output(self.enforcing(args), url, Failure::UnlessOutput)
             .await?;
-        self.items_from_info(url, &output).await
+        self.items(url, &output).await
     }
 
     /// Parses yt-dlp JSON metadata into items and saves it when metadata output is enabled.
-    pub async fn items_from_info(&self, url: &str, output: &[u8]) -> Result<Vec<MediaItem>> {
-        let info: Value = serde_json::from_slice(output).map_err(|err| {
-            Error::Source(format!("yt-dlp returned invalid JSON for {url}: {err}"))
-        })?;
+    async fn items(&self, url: &str, output: &[u8]) -> Result<Vec<MediaItem>> {
+        let info: Value = serde_json::from_slice(output)
+            .map_err(|err| Error::parse(format!("yt-dlp returned invalid JSON for {url}"), err))?;
 
         if self.save_metadata {
             let id = info
@@ -151,14 +177,6 @@ impl YtDlp {
         Ok(items)
     }
 
-    /// Starts a command with the configured executable and extra arguments.
-    /// Append backend-required arguments after these to enforce the backend's behavior.
-    pub fn command(&self) -> Command {
-        let mut command = Command::new(&self.program);
-        command.args(&self.args);
-        command
-    }
-
     /// Downloads the audio of `item` (or reuses an earlier download) and returns its path.
     pub async fn download(&self, item: &MediaItem) -> Result<PathBuf> {
         let url = match &item.media {
@@ -173,22 +191,21 @@ impl YtDlp {
             .map_err(|err| Error::io(format!("creating {}", self.download_dir.display()), err))?;
         let template = self.download_dir.join("%(id)s.%(ext)s");
         let template = template.to_string_lossy();
-        let output = self
-            .run(
-                [
-                    "-f",
-                    "bestaudio/best",
-                    "--no-playlist",
-                    "--no-simulate",
-                    "--no-progress",
-                    "--print",
-                    "after_move:filepath",
-                    "-o",
-                    template.as_ref(),
-                ],
-                url,
-            )
-            .await?;
+        let command = self.with_defaults(
+            &[
+                "-f",
+                "bestaudio/best",
+                "--no-playlist",
+                "--no-simulate",
+                "--no-progress",
+                "--print",
+                "after_move:filepath",
+                "-o",
+                template.as_ref(),
+            ],
+            url,
+        );
+        let output = self.output(command, url, Failure::UnlessOutput).await?;
         let stdout = String::from_utf8_lossy(&output);
         let path = stdout
             .lines()
@@ -211,23 +228,23 @@ impl YtDlp {
         found.into_iter().next()
     }
 
-    /// Runs yt-dlp on `url` and returns its stdout. Warnings are logged; a run that failed
-    /// without output becomes an error carrying yt-dlp's last error line.
-    async fn run<'a>(&self, own: impl IntoIterator<Item = &'a str>, url: &str) -> Result<Vec<u8>> {
+    /// yt-dlp on `url` with `defaults` that the configured extra arguments may override.
+    fn with_defaults(&self, defaults: &[&str], url: &str) -> Command {
         let mut command = Command::new(&self.program);
-        command.args(own).args(&self.args).arg("--").arg(url);
-        self.execute(command, url, true).await
+        command.args(defaults).args(&self.args).arg("--").arg(url);
+        command
     }
 
-    /// Executes a configured command, logging diagnostics and returning stdout.
-    /// With `allow_partial`, a nonzero exit is accepted only when stdout is nonempty,
-    /// allowing available entries of a partially failed playlist to be processed.
-    pub async fn execute(
-        &self,
-        mut command: Command,
-        url: &str,
-        allow_partial: bool,
-    ) -> Result<Vec<u8>> {
+    /// yt-dlp with the configured extra arguments, then `args`, which take precedence.
+    fn enforcing<S: AsRef<OsStr>>(&self, args: impl IntoIterator<Item = S>) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(&self.args).args(args);
+        command
+    }
+
+    /// Runs `command` and returns its stdout, logging yt-dlp's warnings. A failed run becomes
+    /// an error carrying yt-dlp's last error line, unless `failure` accepts its output.
+    async fn output(&self, mut command: Command, url: &str, failure: Failure) -> Result<Vec<u8>> {
         let output = command
             .stdin(Stdio::null())
             .kill_on_drop(true)
@@ -238,7 +255,8 @@ impl YtDlp {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let diagnostics = Diagnostics::parse(&stderr);
         diagnostics.warnings.iter().for_each(|w| self.log_once(w));
-        if !output.status.success() && (!allow_partial || output.stdout.is_empty()) {
+        let accepted = failure == Failure::UnlessOutput && !output.stdout.is_empty();
+        if !output.status.success() && !accepted {
             let message = diagnostics
                 .errors
                 .last()
@@ -263,6 +281,15 @@ impl YtDlp {
             tracing::warn!("yt-dlp: {message}");
         }
     }
+}
+
+/// When a yt-dlp run that exited with an error fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Failure {
+    Always,
+    /// Unless it printed something, such as the available entries of a playlist with
+    /// unavailable ones (`--ignore-errors`).
+    UnlessOutput,
 }
 
 /// The parts of yt-dlp's stderr worth reporting.

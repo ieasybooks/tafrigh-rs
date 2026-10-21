@@ -22,11 +22,12 @@
 
 mod captions;
 
+use std::ffi::OsStr;
+
 use async_trait::async_trait;
 use serde_json::Value;
 use tafrigh::source::{Media, MediaItem, YtDlp};
 use tafrigh::{CaptionProvider, Error, Result, Segment};
-use tokio::process::Command;
 
 pub use captions::{is_subtitle_language, is_youtube_url};
 
@@ -49,18 +50,15 @@ impl YoutubeCaptions {
         }
         Ok(Self { language })
     }
-
-    fn command(ytdlp: &YtDlp) -> Command {
-        let mut command = ytdlp.command();
-        command.args([
-            "--skip-download",
-            "--ignore-no-formats-error",
-            "--no-progress",
-            "--quiet",
-        ]);
-        command
-    }
 }
+
+/// Options for every yt-dlp run: no audio, and no output besides what is asked for.
+const CAPTIONS_ONLY: [&str; 4] = [
+    "--skip-download",
+    "--ignore-no-formats-error",
+    "--no-progress",
+    "--quiet",
+];
 
 #[async_trait]
 impl CaptionProvider for YoutubeCaptions {
@@ -71,17 +69,17 @@ impl CaptionProvider for YoutubeCaptions {
                 "the youtube transcriber requires YouTube URLs".into(),
             ));
         }
-        let mut command = Self::command(ytdlp);
-        command.args([
+        let resolve = [
             "--flat-playlist",
             "--dump-single-json",
             "--ignore-errors",
             "--simulate",
             "--",
             url,
-        ]);
-        let output = ytdlp.execute(command, url, true).await?;
-        ytdlp.items_from_info(url, &output).await
+        ];
+        ytdlp
+            .list(CAPTIONS_ONLY.into_iter().chain(resolve), url)
+            .await
     }
 
     /// Fetches existing captions in the configured language, preferring manual captions to
@@ -99,18 +97,18 @@ impl CaptionProvider for YoutubeCaptions {
                 "the youtube transcriber requires YouTube URLs".into(),
             ));
         }
-        let mut command = Self::command(ytdlp);
-        command.args([
+        let dump_info = [
             "--no-playlist",
             "--dump-single-json",
             "--simulate",
             "--",
             url,
-        ]);
-        let output = ytdlp.execute(command, url, false).await?;
-        let mut info: Value = serde_json::from_slice(&output).map_err(|err| {
-            Error::Source(format!("yt-dlp returned invalid JSON for {url}: {err}"))
-        })?;
+        ];
+        let output = ytdlp
+            .run(CAPTIONS_ONLY.into_iter().chain(dump_info), url)
+            .await?;
+        let mut info: Value = serde_json::from_slice(&output)
+            .map_err(|err| Error::parse(format!("yt-dlp returned invalid JSON for {url}"), err))?;
         captions::select_track(&mut info, language)?;
 
         let temporary =
@@ -127,30 +125,33 @@ impl CaptionProvider for YoutubeCaptions {
             "{}/captions.%(ext)s",
             temporary.path().to_string_lossy().replace('%', "%%")
         );
-        let mut command = Self::command(ytdlp);
-        command
-            .args([
-                "--no-playlist",
-                "--no-simulate",
-                "--write-subs",
-                "--no-write-auto-subs",
-                "--sub-langs",
-                language,
-                "--sub-format",
-                "json3",
-                "--convert-subs",
-                "none",
-                "--no-embed-subs",
-                "--no-write-info-json",
-                "--no-write-thumbnail",
-                "--output",
-                &template,
-                "--output",
-                &format!("subtitle:{template}"),
-                "--load-info-json",
-            ])
-            .arg(&metadata);
-        ytdlp.execute(command, url, false).await?;
+        let subtitle_template = format!("subtitle:{template}");
+        let download = [
+            "--no-playlist",
+            "--no-simulate",
+            "--write-subs",
+            "--no-write-auto-subs",
+            "--sub-langs",
+            language,
+            "--sub-format",
+            "json3",
+            "--convert-subs",
+            "none",
+            "--no-embed-subs",
+            "--no-write-info-json",
+            "--no-write-thumbnail",
+            "--output",
+            &template,
+            "--output",
+            &subtitle_template,
+            "--load-info-json",
+        ];
+        let args = CAPTIONS_ONLY
+            .into_iter()
+            .chain(download)
+            .map(OsStr::new)
+            .chain([metadata.as_os_str()]);
+        ytdlp.run(args, url).await?;
         let path = temporary.path().join(format!("captions.{language}.json3"));
         let bytes = tokio::fs::read(&path).await.map_err(|err| {
             Error::io(

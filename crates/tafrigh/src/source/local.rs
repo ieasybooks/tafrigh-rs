@@ -5,31 +5,28 @@ use super::{Media, MediaItem};
 use crate::{Error, Result};
 
 /// File extensions treated as media when expanding folders.
-pub const MEDIA_EXTENSIONS: &[&str] = &[
+const MEDIA_EXTENSIONS: &[&str] = &[
     "3gp", "aac", "ac3", "aif", "aiff", "amr", "ape", "au", "avi", "caf", "flac", "flv", "m2ts",
     "m4a", "m4b", "m4v", "mka", "mkv", "mov", "mp2", "mp3", "mp4", "mpeg", "mpg", "mts", "oga",
     "ogg", "ogv", "opus", "ra", "spx", "ts", "vob", "wav", "weba", "webm", "wma", "wmv",
 ];
 
 /// True when the file extension is one of [`MEDIA_EXTENSIONS`] (case-insensitive).
-pub fn is_media_path(path: &Path) -> bool {
+pub(super) fn is_media_path(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| MEDIA_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
-/// A file becomes one item; a folder becomes its media files, sorted by name.
-pub fn expand_local(path: &Path) -> Result<Vec<MediaItem>> {
-    discover_local(path, false, None)
-}
-
+/// A file becomes one item; a folder becomes its media files (with `recursive`, also those in
+/// nested folders other than `excluded`), sorted by path.
 pub(crate) fn discover_local(
     path: &Path,
     recursive: bool,
     excluded: Option<&Path>,
 ) -> Result<Vec<MediaItem>> {
     let meta = std::fs::metadata(path)
-        .map_err(|err| Error::Source(format!("{}: {err}", path.display())))?;
+        .map_err(|err| Error::io(format!("reading {}", path.display()), err))?;
     if meta.is_file() {
         return Ok(vec![item(path)]);
     }
@@ -38,7 +35,7 @@ pub(crate) fn discover_local(
     let mut files = Vec::new();
     let mut directories = vec![path.to_owned()];
     while let Some(dir) = directories.pop() {
-        let source_error = |err| Error::Source(format!("{}: {err}", dir.display()));
+        let source_error = |err| Error::io(format!("reading {}", dir.display()), err);
         for entry in std::fs::read_dir(&dir).map_err(source_error)? {
             let entry = entry.map_err(source_error)?;
             let kind = entry.file_type().map_err(source_error)?;
@@ -109,7 +106,7 @@ mod tests {
         let dir = fixture();
         let root = dir.path();
         assert_eq!(
-            paths(expand_local(root).unwrap(), root),
+            paths(discover_local(root, false, None).unwrap(), root),
             [Path::new("z.mp3")]
         );
         assert_eq!(
@@ -117,7 +114,12 @@ mod tests {
             ["a/02.MP4", "a/deeper/01.wav", "out/old.mp3", "z.mp3"].map(std::path::PathBuf::from),
         );
         // An explicitly supplied file still works, regardless of its extension.
-        assert_eq!(expand_local(&root.join("notes.txt")).unwrap().len(), 1);
+        assert_eq!(
+            discover_local(&root.join("notes.txt"), false, None)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]

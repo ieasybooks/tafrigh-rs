@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -8,8 +9,10 @@ use tokio::sync::mpsc;
 
 use super::{ChunkRecognizer, Recognition, Transcriber};
 use crate::audio::{
-    AudioChunk, Decoder, Padding, SAMPLE_RATE, samples_to_seconds, seconds_to_samples,
+    AudioChunk, Decoder, Padding, SAMPLE_RATE, duration_to_samples, samples_to_seconds,
+    seconds_to_samples,
 };
+use crate::error::task_result;
 use crate::event::{Progress, TranscribeEvent};
 use crate::segment::{Merger, Segmenter, SpeechSpan};
 use crate::{Error, ErrorChain, Result, Segment, Word};
@@ -27,11 +30,11 @@ pub enum OnChunkError {
 /// Options for [`ChunkedTranscriber`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkOptions {
-    /// Longest chunk sent to the recognizer, in seconds, before padding. Spans longer than
-    /// this are split (configure the segmenter with the same limit to split at pauses).
-    pub max_chunk_s: f64,
-    /// Merge consecutive speech spans up to `max_chunk_s`: fewer requests and more context
-    /// per request, but longer segments.
+    /// Longest chunk sent to the recognizer, before padding. Spans longer than this are split
+    /// (configure the segmenter with the same limit to split at pauses).
+    pub max_chunk: Duration,
+    /// Merge consecutive speech spans up to `max_chunk`: fewer requests and more context per
+    /// request, but longer segments.
     pub merge: bool,
     /// Audio added on both sides of each chunk; 0.5 s of silence by default, because
     /// recognizers such as Wit drop words that start or end right at the chunk edge.
@@ -41,22 +44,22 @@ pub struct ChunkOptions {
     /// Requests in flight at once. Defaults to the recognizer's
     /// [`ChunkRecognizer::max_in_flight`].
     pub max_in_flight: Option<usize>,
-    /// Resend speech the recognizer skipped: when a chunk's words leave at least this many
-    /// seconds of detected speech uncovered, that stretch goes out again as its own request.
-    /// Recognizers such as Wit sometimes stop transcribing partway through a chunk. Needs word
-    /// timings; `None` disables.
-    pub resend_gaps: Option<f64>,
+    /// Resend speech the recognizer skipped: when a chunk's words leave at least this much
+    /// detected speech uncovered, that stretch goes out again as its own request. Recognizers
+    /// such as Wit sometimes stop transcribing partway through a chunk. Needs word timings;
+    /// `None` disables.
+    pub resend_gaps: Option<Duration>,
 }
 
 impl Default for ChunkOptions {
     fn default() -> Self {
         Self {
-            max_chunk_s: 15.0,
+            max_chunk: Duration::from_secs(15),
             merge: false,
-            padding: Some(Padding::silence(0.5)),
+            padding: Some(Padding::silence(Duration::from_millis(500))),
             on_error: OnChunkError::Abort,
             max_in_flight: None,
-            resend_gaps: Some(1.0),
+            resend_gaps: Some(Duration::from_secs(1)),
         }
     }
 }
@@ -93,31 +96,28 @@ impl ChunkedTranscriber {
     ) -> Result<Self> {
         let segmenter: Arc<dyn Segmenter> = Arc::new(segmenter);
         let recognizer: Arc<dyn ChunkRecognizer> = Arc::new(recognizer);
-        if !options.max_chunk_s.is_finite() || options.max_chunk_s <= 0.0 {
-            return Err(Error::Config(
-                "maximum chunk duration must be positive".into(),
-            ));
-        }
-        if seconds_to_samples(options.max_chunk_s) == 0 {
+        if duration_to_samples(options.max_chunk) == 0 {
             return Err(Error::Config(
                 "maximum chunk duration must be at least one sample".into(),
             ));
         }
         if let Some(gap) = options.resend_gaps
-            && !(gap.is_finite() && seconds_to_samples(gap) > 0)
+            && duration_to_samples(gap) == 0
         {
             return Err(Error::Config(
-                "the gap that triggers a resend must be positive".into(),
+                "the gap that triggers a resend must be at least one sample".into(),
             ));
         }
-        let padding = options.padding.map_or(0.0, |p| p.seconds.max(0.0));
+        let padding = options
+            .padding
+            .map_or(Duration::ZERO, |p| p.length)
+            .saturating_mul(2);
         if let Some(limit) = recognizer.max_audio_duration()
-            && options.max_chunk_s + 2.0 * padding > limit + 1e-9
+            && options.max_chunk.saturating_add(padding) > limit
         {
             return Err(Error::Config(format!(
-                "chunks of {:.2}s plus {:.2}s padding exceed the recognizer's {limit:.2}s limit",
-                options.max_chunk_s,
-                2.0 * padding
+                "chunks of {:.2?} plus {padding:.2?} padding exceed the recognizer's {limit:.2?} limit",
+                options.max_chunk,
             )));
         }
         Ok(Self {
@@ -175,21 +175,21 @@ impl ChunkedTranscriber {
                 source,
             }),
             OnChunkError::Skip => {
-                let error = ErrorChain(&*source).to_string();
                 tracing::warn!(
-                    "skipping {}chunk #{} ({:.2}s–{:.2}s) of {}: {error}",
+                    "skipping {}chunk #{} ({:.2}s–{:.2}s) of {}: {}",
                     if resent { "the resend of " } else { "" },
                     meta.index,
                     meta.start,
                     meta.end,
-                    media.display()
+                    media.display(),
+                    ErrorChain(&*source)
                 );
                 if !resent {
                     progress.report(TranscribeEvent::ChunkSkipped {
                         index: meta.index,
                         start: meta.start,
                         end: meta.end,
-                        error,
+                        error: source.into(),
                     });
                 }
                 Ok(())
@@ -205,6 +205,9 @@ impl Transcriber for ChunkedTranscriber {
         media: &Path,
         progress: &dyn Progress<TranscribeEvent>,
     ) -> Result<Vec<Segment>> {
+        let duration = self.decoder.probe_duration(media).await;
+        progress.report(TranscribeEvent::Started { duration });
+
         let max_in_flight = self
             .options
             .max_in_flight
@@ -216,13 +219,15 @@ impl Transcriber for ChunkedTranscriber {
             decoder: self.decoder.clone(),
             path: media.to_owned(),
             segmenter: self.segmenter.clone(),
-            max_len: seconds_to_samples(self.options.max_chunk_s),
-            merge: self.options.merge,
-            padding: self.options.padding,
+            chunker: Chunker::new(
+                duration_to_samples(self.options.max_chunk),
+                self.options.merge,
+                self.options.padding,
+            ),
             tx,
         };
         let producer_task = tokio::task::spawn_blocking(move || producer.run());
-        let resend_gap = self.options.resend_gaps.map(seconds_to_samples);
+        let resend_gap = self.options.resend_gaps.map(duration_to_samples);
 
         let mut inflight = FuturesUnordered::new();
         let mut segments: Vec<(usize, Segment)> = Vec::new();
@@ -233,31 +238,35 @@ impl Transcriber for ChunkedTranscriber {
                 Some((request, result)) = inflight.next(), if !inflight.is_empty() => {
                     let request: Request = request;
                     let meta = ChunkMeta::of(&request.chunk);
-                    let resent = request.speech.is_none();
+                    let resent = matches!(request.kind, RequestKind::Resend);
                     match result {
                         Ok(recognition) => {
-                            let (recognized, timed) = meta.into_segments(recognition);
+                            let recognized = meta.recognized(recognition);
                             if resent {
                                 tracing::debug!(
                                     "chunk #{} resend {:.2}s–{:.2}s: {} segment(s)",
-                                    meta.index, meta.start, meta.end, recognized.len()
+                                    meta.index, meta.start, meta.end, recognized.segments.len()
                                 );
                             } else {
                                 progress.report(TranscribeEvent::ChunkRecognized {
                                     index: meta.index,
                                     start: meta.start,
                                     end: meta.end,
-                                    empty: recognized.is_empty(),
+                                    empty: recognized.segments.is_empty(),
                                 });
                                 if let Some(min_gap) = resend_gap
-                                    && timed
+                                    && recognized.timed
                                 {
-                                    for again in self.resends(&request, &recognized, min_gap) {
+                                    for again in
+                                        self.resends(&request, &recognized.segments, min_gap)
+                                    {
                                         inflight.push(recognize(self.recognizer.clone(), again));
                                     }
                                 }
                             }
-                            segments.extend(recognized.into_iter().map(|s| (meta.index, s)));
+                            segments.extend(
+                                recognized.segments.into_iter().map(|s| (meta.index, s)),
+                            );
                         }
                         Err(source) => {
                             if let Err(err) = self.failed(meta, resent, source, media, progress) {
@@ -276,9 +285,6 @@ impl Transcriber for ChunkedTranscriber {
                         });
                         inflight.push(recognize(self.recognizer.clone(), *request));
                     }
-                    Some(Produced::Started(duration)) => {
-                        progress.report(TranscribeEvent::Started { duration });
-                    }
                     Some(Produced::Decoded(seconds)) => {
                         progress.report(TranscribeEvent::Decoded { seconds });
                     }
@@ -293,11 +299,7 @@ impl Transcriber for ChunkedTranscriber {
         drop(rx);
         drop(inflight);
 
-        let decoding = match producer_task.await {
-            Ok(result) => result,
-            Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
-            Err(_) => Err(Error::Cancelled),
-        };
+        let decoding = task_result(producer_task.await);
         outcome?;
         decoding?;
 
@@ -315,9 +317,16 @@ struct Request {
     first_sample: usize,
     /// Padding samples before the audio in `chunk.samples`.
     lead: usize,
-    /// Detected speech in the chunk, in source samples; `None` for a resend, which is not
-    /// checked again.
-    speech: Option<Vec<SpeechSpan>>,
+    kind: RequestKind,
+}
+
+/// Why a request is sent.
+enum RequestKind {
+    /// A chunk cut from detected speech. `speech` holds its speech spans, in source samples,
+    /// for finding what the recognizer skipped.
+    Chunk { speech: Vec<SpeechSpan> },
+    /// A stretch of a chunk sent again because the recognizer skipped it. Not checked again.
+    Resend,
 }
 
 async fn recognize(
@@ -336,7 +345,7 @@ impl Request {
     /// stretch would be the whole chunk (nothing was recognized), resending it unchanged would
     /// give the same answer, so its speech spans go out one by one instead.
     fn missed_speech(&self, segments: &[Segment], min_gap: usize) -> Vec<SpeechSpan> {
-        let Some(speech) = &self.speech else {
+        let RequestKind::Chunk { speech } = &self.kind else {
             return Vec::new();
         };
         let mut words: Vec<(usize, usize)> = segments
@@ -421,7 +430,7 @@ impl Request {
             },
             first_sample: self.first_sample + from,
             lead,
-            speech: None,
+            kind: RequestKind::Resend,
         }
     }
 }
@@ -486,9 +495,8 @@ impl ChunkMeta {
     }
 
     /// One segment per utterance, bounded by its words, when every utterance has word
-    /// timings; otherwise a single segment spanning the chunk. The flag tells which: `true`
-    /// when the words show what was recognized where (also when nothing was).
-    fn into_segments(self, recognition: Recognition) -> (Vec<Segment>, bool) {
+    /// timings; otherwise a single segment spanning the chunk.
+    fn recognized(self, recognition: Recognition) -> Recognized {
         let utterances: Vec<(String, Vec<Word>)> = recognition
             .utterances
             .into_iter()
@@ -498,7 +506,10 @@ impl ChunkMeta {
             })
             .collect();
         if utterances.is_empty() {
-            return (Vec::new(), true);
+            return Recognized {
+                segments: Vec::new(),
+                timed: true,
+            };
         }
         if utterances.iter().all(|(_, words)| !words.is_empty()) {
             let segments = utterances
@@ -514,7 +525,10 @@ impl ChunkMeta {
                     }
                 })
                 .collect();
-            return (segments, true);
+            return Recognized {
+                segments,
+                timed: true,
+            };
         }
         let mut text = String::new();
         let mut words = Vec::new();
@@ -531,12 +545,23 @@ impl ChunkMeta {
             text,
             words,
         };
-        (vec![segment], false)
+        Recognized {
+            segments: vec![segment],
+            timed: false,
+        }
     }
 }
 
+/// The segments recognized in a chunk.
+#[derive(Debug, PartialEq)]
+struct Recognized {
+    segments: Vec<Segment>,
+    /// Whether word timings show what was recognized where, so skipped speech can be found.
+    /// Also true when nothing was recognized.
+    timed: bool,
+}
+
 enum Produced {
-    Started(Option<f64>),
     Decoded(f64),
     Chunk(Box<Request>),
     Segmented(usize),
@@ -547,13 +572,158 @@ struct Producer {
     decoder: Decoder,
     path: PathBuf,
     segmenter: Arc<dyn Segmenter>,
-    max_len: usize,
-    merge: bool,
-    padding: Option<Padding>,
+    chunker: Chunker,
     tx: mpsc::Sender<Produced>,
 }
 
+const BLOCK_SAMPLES: usize = SAMPLE_RATE as usize; // one second
+
+impl Producer {
+    fn run(mut self) -> Result<()> {
+        let mut session = self.segmenter.begin()?;
+        let mut reader = self.decoder.open(&self.path)?;
+        let mut block = Vec::with_capacity(BLOCK_SAMPLES);
+        let mut floats = Vec::with_capacity(BLOCK_SAMPLES);
+        let mut spans = Vec::new();
+        let mut decoded = 0;
+        while reader.read(&mut block, BLOCK_SAMPLES)? > 0 {
+            decoded += block.len();
+            self.chunker.add_audio(&block);
+            floats.clear();
+            floats.extend(block.iter().map(|&s| f32::from(s) / 32768.0));
+            session.push(&floats, &mut spans)?;
+            self.send_chunks(&mut spans)?;
+            self.send(Produced::Decoded(samples_to_seconds(decoded)))?;
+            self.chunker.discard_before(session.retain_from());
+        }
+
+        session.finish(&mut spans)?;
+        self.send_chunks(&mut spans)?;
+        if let Some(request) = self.chunker.finish() {
+            self.send(Produced::Chunk(Box::new(request)))?;
+        }
+        self.send(Produced::Segmented(self.chunker.chunks))
+    }
+
+    fn send_chunks(&mut self, spans: &mut Vec<SpeechSpan>) -> Result<()> {
+        let tx = &self.tx;
+        self.chunker.cut(spans.drain(..), |request| {
+            send(tx, Produced::Chunk(Box::new(request)))
+        })
+    }
+
+    fn send(&self, message: Produced) -> Result<()> {
+        send(&self.tx, message)
+    }
+}
+
+/// Waits for room in the channel, so only a few chunks' audio is ever waiting.
+fn send(tx: &mpsc::Sender<Produced>, message: Produced) -> Result<()> {
+    tx.blocking_send(message).map_err(|_| Error::Cancelled)
+}
+
+/// Cuts speech spans into padded requests, merging consecutive spans when configured, and
+/// keeps the decoded audio that requests still to come need.
+struct Chunker {
+    max_len: usize,
+    padding: Option<Padding>,
+    merger: Option<Merger>,
+    /// Speech spans inside the chunk the merger is still growing.
+    parts: Vec<SpeechSpan>,
+    pcm: PcmWindow,
+    /// Chunks cut so far.
+    chunks: usize,
+}
+
+impl Chunker {
+    fn new(max_len: usize, merge: bool, padding: Option<Padding>) -> Self {
+        Self {
+            max_len,
+            padding,
+            merger: merge.then(|| Merger::new(max_len)),
+            parts: Vec::new(),
+            pcm: PcmWindow::default(),
+            chunks: 0,
+        }
+    }
+
+    fn add_audio(&mut self, samples: &[i16]) {
+        self.pcm.samples.extend_from_slice(samples);
+    }
+
+    /// Cuts `spans` into requests and passes each to `send` before cutting the next, so a full
+    /// channel holds back the audio still to be padded. A chunk the merger is still growing
+    /// waits for later spans or [`Self::finish`].
+    fn cut(
+        &mut self,
+        spans: impl Iterator<Item = SpeechSpan>,
+        mut send: impl FnMut(Request) -> Result<()>,
+    ) -> Result<()> {
+        for span in spans {
+            // Segmenters should respect the limit; split defensively if one does not.
+            let mut start = span.start;
+            while start < span.end {
+                let piece = SpeechSpan {
+                    start,
+                    end: (start + self.max_len).min(span.end),
+                };
+                start = piece.end;
+                let Some(merger) = &mut self.merger else {
+                    send(self.request(piece, vec![piece]))?;
+                    continue;
+                };
+                match merger.push(piece) {
+                    // `piece` starts a new chunk; the finished one holds the parts so far.
+                    Some(finished) => {
+                        let parts = std::mem::replace(&mut self.parts, vec![piece]);
+                        send(self.request(finished, parts))?;
+                    }
+                    None => self.parts.push(piece),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The request for the chunk the merger was still growing when the recording ended.
+    fn finish(&mut self) -> Option<Request> {
+        let span = self.merger.as_mut()?.finish()?;
+        let parts = std::mem::take(&mut self.parts);
+        Some(self.request(span, parts))
+    }
+
+    /// Drops audio before `sample`, except what the chunk being merged still needs.
+    fn discard_before(&mut self, sample: usize) {
+        let keep = self
+            .merger
+            .as_ref()
+            .and_then(Merger::retain_from)
+            .map_or(sample, |start| start.min(sample));
+        self.pcm.discard_before(keep);
+    }
+
+    /// The request for the chunk covering `span`, which holds the speech spans `speech`.
+    fn request(&mut self, span: SpeechSpan, speech: Vec<SpeechSpan>) -> Request {
+        let index = self.chunks;
+        self.chunks += 1;
+        let (samples, lead) = pad(self.pcm.slice(span), self.padding, index);
+        Request {
+            chunk: AudioChunk {
+                index,
+                start: samples_to_seconds(span.start),
+                end: samples_to_seconds(span.end),
+                lead_in: samples_to_seconds(lead),
+                samples,
+            },
+            first_sample: span.start,
+            lead,
+            kind: RequestKind::Chunk { speech },
+        }
+    }
+}
+
 /// Decoded samples from `offset` onwards.
+#[derive(Default)]
 struct PcmWindow {
     offset: usize,
     samples: Vec<i16>,
@@ -583,119 +753,6 @@ impl PcmWindow {
     }
 }
 
-const BLOCK_SAMPLES: usize = SAMPLE_RATE as usize; // one second
-
-impl Producer {
-    fn run(self) -> Result<()> {
-        let duration = self.decoder.probe_duration(&self.path);
-        self.send(Produced::Started(duration))?;
-
-        let mut session = self.segmenter.begin()?;
-        let mut reader = self.decoder.open(&self.path)?;
-        let mut merger = self.merge.then(|| Merger::new(self.max_len));
-        // Speech spans inside the chunk the merger is still growing.
-        let mut parts = Vec::new();
-        let mut pcm = PcmWindow {
-            offset: 0,
-            samples: Vec::new(),
-        };
-        let mut block = Vec::with_capacity(BLOCK_SAMPLES);
-        let mut floats = Vec::with_capacity(BLOCK_SAMPLES);
-        let mut spans = Vec::new();
-        let mut decoded = 0usize;
-        let mut chunks = 0usize;
-
-        loop {
-            let read = reader.read(&mut block, BLOCK_SAMPLES)?;
-            if read == 0 {
-                break;
-            }
-            decoded += read;
-            pcm.samples.extend_from_slice(&block);
-            floats.clear();
-            floats.extend(block.iter().map(|&s| f32::from(s) / 32768.0));
-            session.push(&floats, &mut spans)?;
-            self.emit_spans(&mut spans, &mut merger, &mut parts, &pcm, &mut chunks)?;
-            self.send(Produced::Decoded(samples_to_seconds(decoded)))?;
-
-            let keep = merger
-                .as_ref()
-                .and_then(Merger::retain_from)
-                .map_or(session.retain_from(), |m| m.min(session.retain_from()));
-            pcm.discard_before(keep);
-        }
-
-        session.finish(&mut spans)?;
-        self.emit_spans(&mut spans, &mut merger, &mut parts, &pcm, &mut chunks)?;
-        if let Some(span) = merger.as_mut().and_then(Merger::finish) {
-            self.emit(span, std::mem::take(&mut parts), &pcm, &mut chunks)?;
-        }
-        self.send(Produced::Segmented(chunks))
-    }
-
-    fn emit_spans(
-        &self,
-        spans: &mut Vec<SpeechSpan>,
-        merger: &mut Option<Merger>,
-        parts: &mut Vec<SpeechSpan>,
-        pcm: &PcmWindow,
-        chunks: &mut usize,
-    ) -> Result<()> {
-        for span in spans.drain(..) {
-            // Segmenters should respect the limit; split defensively if one does not.
-            let mut start = span.start;
-            while start < span.end {
-                let piece = SpeechSpan {
-                    start,
-                    end: (start + self.max_len).min(span.end),
-                };
-                start = piece.end;
-                match merger {
-                    Some(merger) => match merger.push(piece) {
-                        // `piece` starts a new chunk; the finished one holds the parts so far.
-                        Some(finished) => {
-                            let done = std::mem::replace(parts, vec![piece]);
-                            self.emit(finished, done, pcm, chunks)?;
-                        }
-                        None => parts.push(piece),
-                    },
-                    None => self.emit(piece, vec![piece], pcm, chunks)?,
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Sends the chunk covering `span`, which holds the speech spans `speech`.
-    fn emit(
-        &self,
-        span: SpeechSpan,
-        speech: Vec<SpeechSpan>,
-        pcm: &PcmWindow,
-        chunks: &mut usize,
-    ) -> Result<()> {
-        let index = *chunks;
-        *chunks += 1;
-        let (samples, lead) = pad(pcm.slice(span), self.padding, index);
-        self.send(Produced::Chunk(Box::new(Request {
-            chunk: AudioChunk {
-                index,
-                start: samples_to_seconds(span.start),
-                end: samples_to_seconds(span.end),
-                lead_in: samples_to_seconds(lead),
-                samples,
-            },
-            first_sample: span.start,
-            lead,
-            speech: Some(speech),
-        })))
-    }
-
-    fn send(&self, message: Produced) -> Result<()> {
-        self.tx.blocking_send(message).map_err(|_| Error::Cancelled)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -707,6 +764,20 @@ mod tests {
     impl ChunkRecognizer for NoopRecognizer {
         async fn recognize(&self, _chunk: &AudioChunk) -> Result<Recognition, BoxError> {
             Ok(Recognition::default())
+        }
+    }
+
+    /// Accepts up to its duration of audio per request.
+    struct LimitedRecognizer(Duration);
+
+    #[async_trait::async_trait]
+    impl ChunkRecognizer for LimitedRecognizer {
+        async fn recognize(&self, _chunk: &AudioChunk) -> Result<Recognition, BoxError> {
+            Ok(Recognition::default())
+        }
+
+        fn max_audio_duration(&self) -> Option<Duration> {
+            Some(self.0)
         }
     }
 
@@ -742,7 +813,7 @@ mod tests {
                 },
             ],
         };
-        let (segments, _) = META.into_segments(recognition);
+        let segments = META.recognized(recognition).segments;
         assert_eq!(segments.len(), 2);
         assert_eq!((segments[0].start, segments[0].end), (10.5, 11.6));
         assert_eq!(segments[0].text, "first part");
@@ -763,12 +834,18 @@ mod tests {
                 },
             ],
         };
-        let (segments, _) = META.into_segments(recognition);
+        let segments = META.recognized(recognition).segments;
         assert_eq!(segments.len(), 1);
         assert_eq!((segments[0].start, segments[0].end), (10.0, 20.0));
         assert_eq!(segments[0].text, "timed untimed");
         assert_eq!(segments[0].words.len(), 1);
-        assert_eq!(META.into_segments(Recognition::text("  ")), (vec![], true));
+        assert_eq!(
+            META.recognized(Recognition::text("  ")),
+            Recognized {
+                segments: vec![],
+                timed: true
+            }
+        );
     }
 
     #[test]
@@ -798,15 +875,18 @@ mod tests {
 
     #[test]
     fn utterances_with_only_invalid_words_use_chunk_fallback() {
-        let segments = META.into_segments(Recognition {
+        let recognized = META.recognized(Recognition {
             utterances: vec![Utterance {
                 text: "invalid timings".into(),
                 words: vec![word(f64::NAN, 1.0, "invalid")],
             }],
         });
         assert_eq!(
-            segments,
-            (vec![Segment::new(10.0, 20.0, "invalid timings")], false)
+            recognized,
+            Recognized {
+                segments: vec![Segment::new(10.0, 20.0, "invalid timings")],
+                timed: false
+            }
         );
     }
 
@@ -828,12 +908,12 @@ mod tests {
             },
             first_sample: first,
             lead,
-            speech: Some(
-                speech
+            kind: RequestKind::Chunk {
+                speech: speech
                     .iter()
                     .map(|&(start, end)| SpeechSpan { start, end })
                     .collect(),
-            ),
+            },
         }
     }
 
@@ -890,7 +970,8 @@ mod tests {
     #[test]
     fn resends_a_padded_slice_of_the_chunk() {
         let chunk = request(50 * S, 4 * S, 100, &[(50 * S, 54 * S)]);
-        let resend = chunk.resend(span(51 * S, 53 * S), Some(Padding::silence(0.5)));
+        let half_second = Padding::silence(Duration::from_millis(500));
+        let resend = chunk.resend(span(51 * S, 53 * S), Some(half_second));
         assert_eq!(resend.chunk.index, 3);
         assert!((resend.chunk.start - 51.0).abs() < 1e-9);
         assert!((resend.chunk.end - 53.0).abs() < 1e-9);
@@ -900,24 +981,57 @@ mod tests {
         // The audio is the original chunk's 1s–3s.
         assert_eq!(resend.chunk.samples[S / 2], (S + 1) as i16);
         assert_eq!(resend.chunk.samples[S / 2 + 2 * S - 1], (3 * S) as i16);
-        assert!(resend.speech.is_none());
+        assert!(matches!(resend.kind, RequestKind::Resend));
         // Regions reaching past the chunk are clamped to it.
         let clamped = chunk.resend(span(53 * S, 60 * S), None);
         assert_eq!(clamped.chunk.samples.len(), S);
     }
 
     #[test]
+    fn cutting_stops_at_the_first_request_that_cannot_be_sent() {
+        // One second of audio in 1ms chunks would be a thousand padded requests.
+        let half_second = Padding::silence(Duration::from_millis(500));
+        let mut chunker = Chunker::new(S / 1000, false, Some(half_second));
+        chunker.add_audio(&vec![0; S]);
+        let mut sent = 0;
+        let result = chunker.cut(std::iter::once(span(0, S)), |_| {
+            sent += 1;
+            Err(Error::Cancelled)
+        });
+        assert!(matches!(result, Err(Error::Cancelled)));
+        assert_eq!((sent, chunker.chunks), (1, 1));
+    }
+
+    #[test]
     fn rejects_chunk_limit_below_one_sample() {
-        let segmenter = crate::segment::FixedWindows::new(1.0).unwrap();
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(1)).unwrap();
         let error = ChunkedTranscriber::new(
             segmenter,
             NoopRecognizer,
             ChunkOptions {
-                max_chunk_s: 1e-6,
+                max_chunk: Duration::from_micros(1),
                 ..ChunkOptions::default()
             },
         )
         .unwrap_err();
         assert!(error.to_string().contains("at least one sample"));
+    }
+
+    #[test]
+    fn rejects_padding_too_long_to_double() {
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(15)).unwrap();
+        let error = ChunkedTranscriber::new(
+            segmenter,
+            LimitedRecognizer(Duration::from_mins(1)),
+            ChunkOptions {
+                padding: Some(Padding::silence(Duration::MAX)),
+                ..ChunkOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("exceed the recognizer's"),
+            "{error}"
+        );
     }
 }

@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use tafrigh::output::BuiltinFormat;
-use usage_rs::{ValidationError, ValueEnum};
+use usage_rs::ValueEnum;
 
 /// Tool requirements and reusable argument-file syntax.
 const HELP_FOOTER: &str = "\
@@ -34,7 +34,7 @@ Boolean transcription flags accept a --no- prefix, such as --no-merge, to overri
     arg_required_else_help,
     unknown_flags = "error",
     max_term_width = 100,
-    validate_with = validate,
+    try_into = crate::setup::Plan,
     exit_code(0, "Success"),
     exit_code(1, "Setup, filesystem or other runtime error"),
     exit_code(2, "Invalid arguments"),
@@ -215,31 +215,6 @@ pub enum OutputMode {
     TreeToTree,
     /// Put all transcripts directly in -o.
     Flat,
-}
-
-impl Output {
-    /// Resolve and validate the destination mode before any tools or network requests.
-    pub fn mode(&self) -> Result<tafrigh::output::OutputMode, ValidationError> {
-        use tafrigh::output::OutputMode as Mode;
-
-        match (self.mode, self.dir.is_some()) {
-            (Some(OutputMode::SideBySide), true) => Err(ValidationError::field("--output-mode")
-                .value("side-by-side")
-                .reason("cannot be used with --output-dir")),
-            (Some(OutputMode::TreeToTree | OutputMode::Flat), false) => {
-                Err(ValidationError::field("--output-mode")
-                    .value(if self.mode == Some(OutputMode::Flat) {
-                        "flat"
-                    } else {
-                        "tree-to-tree"
-                    })
-                    .reason("tree-to-tree and flat require --output-dir"))
-            }
-            (Some(OutputMode::SideBySide) | None, false) => Ok(Mode::SideBySide),
-            (Some(OutputMode::TreeToTree) | None, true) => Ok(Mode::TreeToTree),
-            (Some(OutputMode::Flat), true) => Ok(Mode::Flat),
-        }
-    }
 }
 
 /// A value of `--format`.
@@ -429,108 +404,6 @@ pub struct Tools {
     pub ffprobe: PathBuf,
 }
 
-/// Validate user options before constructing tools, models or HTTP clients.
-fn validate(cli: &Cli) -> Result<(), ValidationError> {
-    let Command::Transcribe(args) = &cli.command else {
-        return Ok(());
-    };
-    args.output.mode()?;
-    args.output
-        .formats()
-        .map_err(|error| ValidationError::field("--format").reason(error.to_string()))?;
-
-    if let Some(extra) = &args.tools.yt_dlp_args {
-        shell_words::split(extra)
-            .map_err(|error| ValidationError::field("--yt-dlp-args").reason(error.to_string()))?;
-    }
-    if args.transcriber == Transcriber::Youtube {
-        let language = args.subtitle_language.as_deref().ok_or_else(|| {
-            ValidationError::field("--subtitle-language")
-                .reason("is required with --transcriber youtube")
-        })?;
-        if !tafrigh_youtube::is_subtitle_language(language) {
-            return Err(ValidationError::field("--subtitle-language")
-                .reason("expected one language code, such as ar or en-US; patterns and lists are not supported"));
-        }
-        if args
-            .inputs
-            .iter()
-            .any(|input| !tafrigh_youtube::is_youtube_url(input))
-        {
-            return Err(ValidationError::field("INPUT")
-                .reason("--transcriber youtube requires YouTube URLs"));
-        }
-        return Ok(());
-    }
-    if args.subtitle_language.is_some() {
-        return Err(ValidationError::field("--subtitle-language")
-            .reason("requires --transcriber youtube; use --wit-language for Wit"));
-    }
-
-    let segmentation = &args.segmentation;
-    for (name, value, allow_zero) in [
-        ("--max-chunk", segmentation.max_chunk, false),
-        ("--pad", segmentation.pad, true),
-        ("--resend-gaps", segmentation.resend_gaps, true),
-        ("--wit-rps", args.wit.requests_per_second, false),
-    ] {
-        if !value.is_finite() || value < 0.0 || (!allow_zero && value == 0.0) {
-            return Err(ValidationError::field(name)
-                .value(value.to_string())
-                .reason(if allow_zero {
-                    "must be finite and zero or positive"
-                } else {
-                    "must be finite and positive"
-                }));
-        }
-    }
-    if !(0.0..=1.0).contains(&segmentation.vad_threshold) {
-        return Err(ValidationError::field("--vad-threshold")
-            .value(segmentation.vad_threshold.to_string())
-            .reason("must be between 0 and 1"));
-    }
-    if let Some(noise) = segmentation.pad_noise {
-        if !noise.is_finite() || noise > 0.0 {
-            return Err(ValidationError::field("--pad-noise")
-                .value(noise.to_string())
-                .reason("must be finite and at most 0 dBFS"));
-        }
-        if segmentation.pad == 0.0 {
-            return Err(
-                ValidationError::field("--pad-noise").reason("requires --pad greater than zero")
-            );
-        }
-    }
-    if args.wit.tokens.iter().all(|token| token.trim().is_empty()) {
-        return Err(
-            ValidationError::field("--wit-token").reason("at least one nonblank token is required")
-        );
-    }
-    if args.wit.concurrency == Some(0) || args.wit.attempts == 0 {
-        return Err(ValidationError::field(if args.wit.attempts == 0 {
-            "--wit-attempts"
-        } else {
-            "--wit-concurrency"
-        })
-        .value("0")
-        .reason("must be at least 1"));
-    }
-    let max_audio = args.wit.config(segmentation.request_seconds()).max_audio();
-    if !max_audio.is_finite() || max_audio <= 0.0 {
-        return Err(ValidationError::field("--wit-max-audio")
-            .value(max_audio.to_string())
-            .reason("must be finite and positive"));
-    }
-    if segmentation.request_seconds() > max_audio + 1e-9 {
-        return Err(ValidationError::field("--max-chunk")
-            .value(segmentation.max_chunk.to_string())
-            .reason(format!(
-                "chunk plus padding exceeds the {max_audio}s Wit audio limit"
-            )));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
@@ -638,7 +511,7 @@ mod tests {
         assert_eq!(args.output.dir, Some("last".into()));
         assert_eq!(
             args.output.mode().unwrap(),
-            tafrigh::output::OutputMode::TreeToTree
+            tafrigh::output::OutputMode::TreeToTree("last".into())
         );
         assert!(!args.segmentation.merge);
         assert!(!args.recursive);

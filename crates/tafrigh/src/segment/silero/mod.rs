@@ -4,57 +4,64 @@
 //! Silero 6.2.1's rules. When speech runs longer than the maximum, it is cut at the longest
 //! pause inside it rather than mid-word.
 
+#[cfg(test)]
+mod golden_tests;
 mod model;
-pub mod timestamps;
+mod timestamps;
 
-pub use model::{MODEL_ONNX, ProbabilityStream, SileroModel};
-pub use timestamps::{StreamingTimestamps, TimestampParams, speech_timestamps};
+use model::ProbabilityStream;
+pub use model::SileroModel;
+use timestamps::{StreamingTimestamps, TimestampParams};
+
+use std::time::Duration;
 
 use super::{SegmentationSession, Segmenter, SpeechSpan};
 use crate::audio::SAMPLE_RATE;
 use crate::{Error, Result};
 
 /// Samples per Silero frame at 16 kHz.
-pub const WINDOW_SAMPLES: usize = 512;
+const WINDOW_SAMPLES: usize = 512;
 /// Samples of the previous frame prepended to each frame.
-pub const CONTEXT_SAMPLES: usize = 64;
+const CONTEXT_SAMPLES: usize = 64;
 
-/// Settings tuned for chunked cloud recognition.
+/// Settings tuned for chunked cloud recognition. Durations below the longest span are used
+/// in whole milliseconds, as in Silero.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SileroConfig {
     /// Speech probability at or above which a frame counts as speech.
     pub threshold: f32,
-    /// Shortest speech kept, in milliseconds.
-    pub min_speech_ms: u32,
-    /// Longest span, in seconds. Longer speech is split at its longest pause.
-    pub max_speech_s: f64,
-    /// Silence that ends a span, in milliseconds.
-    pub min_silence_ms: u32,
-    /// Padding on each side of a span, in milliseconds.
-    pub speech_pad_ms: u32,
+    /// Shortest speech kept.
+    pub min_speech: Duration,
+    /// Longest span. Longer speech is split at its longest pause.
+    pub max_speech: Duration,
+    /// Silence that ends a span.
+    pub min_silence: Duration,
+    /// Padding on each side of a span.
+    pub speech_pad: Duration,
 }
 
 impl Default for SileroConfig {
     fn default() -> Self {
         Self {
             threshold: 0.5,
-            min_speech_ms: 500,
-            max_speech_s: 15.0,
-            min_silence_ms: 300,
-            speech_pad_ms: 250,
+            min_speech: Duration::from_millis(500),
+            max_speech: Duration::from_secs(15),
+            min_silence: Duration::from_millis(300),
+            speech_pad: Duration::from_millis(250),
         }
     }
 }
 
 impl SileroConfig {
     /// The full timestamp rules these settings stand for.
-    pub fn timestamp_params(&self) -> TimestampParams {
+    fn timestamp_params(&self) -> TimestampParams {
+        let millis = |duration: Duration| u32::try_from(duration.as_millis()).unwrap_or(u32::MAX);
         TimestampParams {
             threshold: self.threshold,
-            min_speech_ms: self.min_speech_ms,
-            max_speech_s: self.max_speech_s,
-            min_silence_ms: self.min_silence_ms,
-            speech_pad_ms: self.speech_pad_ms,
+            min_speech_ms: millis(self.min_speech),
+            max_speech_s: self.max_speech.as_secs_f64(),
+            min_silence_ms: millis(self.min_silence),
+            speech_pad_ms: millis(self.speech_pad),
             ..TimestampParams::default()
         }
     }
@@ -65,12 +72,13 @@ impl SileroConfig {
                 "VAD threshold must be between 0 and 1".into(),
             ));
         }
+        let params = self.timestamp_params();
         let rate = f64::from(SAMPLE_RATE);
         let min_span =
-            (WINDOW_SAMPLES as f64 + 2.0 * f64::from(self.speech_pad_ms) * rate / 1000.0) / rate;
-        if !self.max_speech_s.is_finite() || self.max_speech_s <= min_span {
+            (WINDOW_SAMPLES as f64 + 2.0 * f64::from(params.speech_pad_ms) * rate / 1000.0) / rate;
+        if params.max_speech_s <= min_span {
             return Err(Error::Config(format!(
-                "maximum speech duration must be finite and above {min_span:.3}s"
+                "maximum speech duration must be above {min_span:.3}s"
             )));
         }
         Ok(())
@@ -97,11 +105,6 @@ impl SileroSegmenter {
             model,
             params: config.timestamp_params(),
         })
-    }
-
-    /// Full control over the timestamp rules.
-    pub fn with_params(model: SileroModel, params: TimestampParams) -> Self {
-        Self { model, params }
     }
 }
 

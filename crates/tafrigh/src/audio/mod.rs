@@ -3,6 +3,8 @@
 mod decode;
 mod padding;
 
+use std::time::Duration;
+
 pub use decode::{Decoder, PcmReader};
 pub use padding::{Padding, PaddingFill};
 
@@ -10,13 +12,18 @@ pub use padding::{Padding, PaddingFill};
 pub const SAMPLE_RATE: u32 = 16_000;
 
 /// Duration of `samples` samples at [`SAMPLE_RATE`], in seconds.
-pub fn samples_to_seconds(samples: usize) -> f64 {
+pub(crate) fn samples_to_seconds(samples: usize) -> f64 {
     samples as f64 / f64::from(SAMPLE_RATE)
 }
 
 /// Number of samples in `seconds` at [`SAMPLE_RATE`], rounded; negative input gives 0.
-pub fn seconds_to_samples(seconds: f64) -> usize {
+pub(crate) fn seconds_to_samples(seconds: f64) -> usize {
     (seconds.max(0.0) * f64::from(SAMPLE_RATE)).round() as usize
+}
+
+/// Number of samples in `duration` at [`SAMPLE_RATE`], rounded.
+pub(crate) fn duration_to_samples(duration: Duration) -> usize {
+    seconds_to_samples(duration.as_secs_f64())
 }
 
 /// A piece of the source audio sent to a recognizer.
@@ -36,15 +43,8 @@ pub struct AudioChunk {
 
 impl AudioChunk {
     /// Duration of the audio actually sent, padding included.
-    pub fn audio_duration(&self) -> f64 {
-        samples_to_seconds(self.samples.len())
-    }
-
-    /// The samples as little-endian 16-bit PCM bytes.
-    pub fn pcm_le_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.samples.len() * 2);
-        self.extend_pcm(&mut bytes);
-        bytes
+    pub fn audio_duration(&self) -> Duration {
+        Duration::from_secs_f64(samples_to_seconds(self.samples.len()))
     }
 
     /// The samples as a complete WAV file (PCM, mono, 16-bit, 16 kHz).
@@ -63,12 +63,8 @@ impl AudioChunk {
         wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
         wav.extend_from_slice(b"data");
         wav.extend_from_slice(&data_len.to_le_bytes());
-        self.extend_pcm(&mut wav);
+        wav.extend(self.samples.iter().flat_map(|sample| sample.to_le_bytes()));
         wav
-    }
-
-    fn extend_pcm(&self, out: &mut Vec<u8>) {
-        out.extend(self.samples.iter().flat_map(|sample| sample.to_le_bytes()));
     }
 }
 
@@ -94,7 +90,6 @@ mod tests {
             SAMPLE_RATE
         );
         assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 6);
-        assert_eq!(&wav[44..], &chunk.pcm_le_bytes()[..]);
-        assert_eq!(chunk.pcm_le_bytes(), [1, 0, 0xfe, 0xff, 3, 0]);
+        assert_eq!(&wav[44..], [1, 0, 0xfe, 0xff, 3, 0]);
     }
 }

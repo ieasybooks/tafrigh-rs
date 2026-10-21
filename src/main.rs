@@ -10,14 +10,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use tafrigh::output::OutputMode;
 use tafrigh::source::Input;
 use tafrigh::{ChunkedTranscriber, Event, Tafrigh};
 use tafrigh_wit::WitRecognizer;
-use tafrigh_youtube::YoutubeCaptions;
 use tracing_subscriber::EnvFilter;
 
-use crate::cli::{Args, Command};
+use crate::setup::{Backend, Plan, Run};
 use crate::ui::Ui;
 
 // Exit codes, also declared in `cli` for the Usage spec and reference docs: 0 success, 1 error,
@@ -28,14 +26,14 @@ const EXIT_FAILURES: u8 = 3;
 const EXIT_INTERRUPTED: u8 = 130;
 
 fn main() -> ExitCode {
-    let cli = match command::parse() {
-        Ok(cli) => cli,
+    let plan = match command::parse() {
+        Ok(plan) => plan,
         Err(code) => return code,
     };
-    let result = match cli.command {
-        Command::Transcribe(args) => return transcribe(*args),
-        Command::Completions(args) => command::completions(&args),
-        Command::Spec => command::spec(),
+    let result = match plan {
+        Plan::Transcribe(run) => return transcribe(*run),
+        Plan::Completions(args) => command::completions(&args),
+        Plan::Spec => command::spec(),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -46,10 +44,9 @@ fn main() -> ExitCode {
     }
 }
 
-fn transcribe(args: Args) -> ExitCode {
-    let output_mode = args.output.mode().expect("validated CLI output mode");
-    let ui = Arc::new(Ui::new(args.quiet));
-    init_logging(args.verbose, &ui);
+fn transcribe(run: Run) -> ExitCode {
+    let ui = Arc::new(Ui::new(run.quiet));
+    init_logging(run.verbose, &ui);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -57,7 +54,7 @@ fn transcribe(args: Args) -> ExitCode {
         .expect("tokio runtime");
     let result = runtime.block_on(async {
         tokio::select! {
-            result = run(args, output_mode, &ui) => result,
+            result = start(run, &ui) => result,
             _ = tokio::signal::ctrl_c() => {
                 ui.clear();
                 eprintln!("interrupted");
@@ -75,60 +72,42 @@ fn transcribe(args: Args) -> ExitCode {
     })
 }
 
-async fn run(args: Args, output_mode: OutputMode, ui: &Ui) -> anyhow::Result<ExitCode> {
-    let inputs: Vec<Input> = args
-        .inputs
-        .iter()
-        .map(String::as_str)
-        .map(Input::parse)
-        .collect();
+async fn start(run: Run, ui: &Ui) -> anyhow::Result<ExitCode> {
     // Before anything touches the network, so a missing program fails fast.
-    let output = args.output.writer()?;
-    let ytdlp = args.tools.ytdlp(output.dir())?;
-    let builder = match args.transcriber {
-        cli::Transcriber::Wit => {
-            let decoder = args.tools.decoder();
-            setup::check_tools(
-                Some(&decoder),
-                inputs.iter().any(Input::is_url).then_some(&ytdlp),
-            )
-            .await?;
-            let segmenter = args.segmentation.segmenter()?;
-            let recognizer =
-                WitRecognizer::new(args.wit.config(args.segmentation.request_seconds()))
-                    .await
-                    .context("setting up Wit.ai")?;
+    let needs_ytdlp = run.inputs.iter().any(Input::is_url);
+    let builder = match run.backend {
+        Backend::Wit(wit) => {
+            setup::check_tools(Some(&wit.decoder), needs_ytdlp.then_some(&run.ytdlp)).await?;
+            let segmenter = wit.segmenter.build()?;
+            let tokens = wit.wit.tokens.len();
+            let recognizer = WitRecognizer::new(wit.wit)
+                .await
+                .context("setting up Wit.ai")?;
             tracing::info!(
-                "Wit.ai: {} token(s), language {}",
-                args.wit.tokens.len(),
+                "Wit.ai: {tokens} token(s), language {}",
                 recognizer.language()
             );
-            let transcriber =
-                ChunkedTranscriber::new(segmenter, recognizer, args.segmentation.chunk_options())?
-                    .with_decoder(decoder);
+            let transcriber = ChunkedTranscriber::new(segmenter, recognizer, wit.chunks)?
+                .with_decoder(wit.decoder);
             Tafrigh::builder(transcriber)
         }
-        cli::Transcriber::Youtube => {
-            setup::check_tools(None, Some(&ytdlp)).await?;
-            Tafrigh::captions(YoutubeCaptions::new(
-                args.subtitle_language
-                    .as_deref()
-                    .expect("validated subtitle language"),
-            )?)
+        Backend::Youtube(captions) => {
+            setup::check_tools(None, Some(&run.ytdlp)).await?;
+            Tafrigh::captions(captions)
         }
     };
 
     let tafrigh = builder
-        .recursive(args.recursive)
-        .output(output)
-        .output_mode(output_mode)
-        .ytdlp(ytdlp)
-        .skip_existing(args.output.skip_existing)
-        .sample(args.output.sample)
+        .recursive(run.recursive)
+        .output(run.output)
+        .output_mode(run.output_mode)
+        .ytdlp(run.ytdlp)
+        .skip_existing(run.skip_existing)
+        .sample(run.sample)
         .build();
 
     let report = tafrigh
-        .run(inputs, &|event: Event| ui.handle(event))
+        .run(run.inputs, &|event: Event| ui.handle(event))
         .await?;
     ui.summary(&report);
     Ok(if report.failures() > 0 {
