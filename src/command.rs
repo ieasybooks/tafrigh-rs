@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use usage_rs::embedded::{Exit, Outcome};
-use usage_rs::install::{Env, OnForeign, Wrote};
+use usage_rs::install::{Env, Loading, OnForeign, Wrote};
 
 use crate::cli::{Cli, Completions};
 
@@ -75,8 +75,11 @@ pub fn completions(args: &Completions) -> anyhow::Result<()> {
         println!("{action}: {}", installed.plan.path.display());
         installed.plan
     };
-    if let Some(instruction) = plan.loading.instruction() {
-        println!("{instruction}");
+    if let Loading::Manual { line, file, .. } = &plan.loading {
+        println!("Add this to {file}:\n{line}");
+    }
+    if let Some(note) = plan.note {
+        println!("Note: {note}");
     }
     Ok(())
 }
