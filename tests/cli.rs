@@ -59,7 +59,6 @@ fn help_version_and_spec_work_without_credentials_or_tools() {
         assert!(help.contains(text), "missing {text}: {help}");
     }
     let spec = stdout(&command().arg("spec").output().unwrap());
-    let _: usage_parser::Spec = spec.parse().unwrap();
     assert_eq!(
         spec,
         stdout(&command().arg("__usage_spec__").output().unwrap())

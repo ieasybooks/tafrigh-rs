@@ -31,7 +31,6 @@ usage-rs = { version = "7.1.0", features = ["completions", "response-files"] }
 tempfile.workspace = true
 wiremock.workspace = true
 usage-rs = { version = "7.1.0", features = ["test"] }
-usage-parser = { package = "usage-lib", version = "7.1.0" }
 
 [lints]
 workspace = true

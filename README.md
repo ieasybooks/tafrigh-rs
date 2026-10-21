@@ -131,7 +131,7 @@ optional [Usage CLI](https://usage.jdx.dev/cli/), you can generate other artifac
 
 ```sh
 tafrigh spec > tafrigh.usage.kdl
-usage generate markdown -f tafrigh.usage.kdl --out-file reference.md
+usage generate markdown -f tafrigh.usage.kdl --html-encode --out-file reference.md
 usage generate manpage -f tafrigh.usage.kdl > tafrigh.1
 ```
 
@@ -201,12 +201,15 @@ The root package is `tafrigh-cli`, with its source in `src/`. The `tafrigh` and 
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
+mise install usage
 sh scripts/cli-docs.sh
 ```
 
 Regenerate `docs/cli.md` and `docs/tafrigh.1` after changing the CLI. The script uses
-the locked Usage library through a Cargo example; no standalone Usage installation
-is required. CI checks that the committed reference matches the current parser.
+the official [Usage CLI generators](https://usage.jdx.dev/cli/) with the version
+pinned in `mise.toml`. Without mise, install it with
+`cargo install usage-cli --version 7.1.0 --locked` and ensure `usage` is on your PATH.
+CI installs the same pin and checks that the committed reference matches the current parser.
 
 The Silero test fixtures are committed. To regenerate them, see `crates/tafrigh/tests/fixtures/generate.py`.
 
