@@ -3,7 +3,7 @@
 - **License:** MIT
 - **Repository:** https://github.com/ieasybooks/tafrigh-rs
 
-Transcribe audio and video into subtitles and text with Wit.ai.
+Transcribe with Wit.ai or retrieve existing YouTube captions.
 
 Transcription is the default command. Use completions to set up your shell, or spec to export the CLI definition for documentation and other Usage tools.
 
@@ -13,7 +13,7 @@ Transcription is the default command. Use completions to set up your shell, or s
 Transcribe a local recording
 
 ```
-tafrigh lecture.mp3 -w TOKEN
+tafrigh lecture.mp3 --transcriber wit -w TOKEN
 ```
 
 Install shell completions
@@ -40,14 +40,18 @@ tafrigh completions zsh --install
 
 - **Usage:** `tafrigh transcribe <FLAGS> <INPUT>…`
 
-Transcribe audio and video into subtitles and text with Wit.ai.
+Transcribe with Wit.ai or retrieve existing YouTube captions.
 
-Inputs can be media files, folders of media files, or URLs (videos, playlists, channels; anything yt-dlp supports).
+Inputs can be media files, folders of media files, or URLs (videos, playlists, channels; anything yt-dlp supports). The youtube transcriber accepts only YouTube URLs and existing captions in --subtitle-language; it never invokes Wit.
 
 ### Arguments
 - **`<INPUT>…`** — Files, folders or URLs to transcribe.
 
 ### Flags
+- **`--transcriber <BACKEND>`** — Backend to use for the entire run. Required; no automatic switching.
+
+  **Choices:** `wit`, `youtube`
+- **`--subtitle-language <LANG>`** — One exact YouTube subtitle language (e.g. ar or en-US); required with --transcriber youtube. Prefers manual captions, then original automatic captions; never translates.
 - **`-r --recursive`** — Include media in subdirectories. Directory symlinks are not followed.
 - **`-q --quiet`** — Hide progress bars.
 - **`-v --verbose`** — More logging (-v debug, -vv trace). RUST_LOG overrides.
@@ -144,7 +148,7 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
   **Default:** `yt-dlp`
 
   **Environment Variable:** `TAFRIGH_YT_DLP`
-- **`--ffmpeg <PATH>`** — ffmpeg executable (required).
+- **`--ffmpeg <PATH>`** — ffmpeg executable (required with --transcriber wit).
 
   **Default:** `ffmpeg`
 
@@ -170,22 +174,23 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
 Mirror a folder of recordings
 
 ```
-tafrigh transcribe lectures/ -r -o transcripts -f srt,txt -w TOKEN
+tafrigh transcribe lectures/ --transcriber wit -r -o transcripts -f srt,txt -w TOKEN
 ```
 
 Include word-level subtitles
 
 ```
-tafrigh transcribe lecture.mp3 -f srt --words -w TOKEN
+tafrigh transcribe lecture.mp3 --transcriber wit -f srt --words -w TOKEN
 ```
 
-Resume a playlist
+Retrieve existing Arabic captions
 
 ```
-tafrigh transcribe https://example.com/playlist --skip-existing -w TOKEN
+tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID --transcriber youtube --subtitle-language ar
 ```
 
-Requires ffmpeg, plus yt-dlp for URLs (and a JavaScript runtime such as Deno for YouTube).
+Wit requires ffmpeg and Wit tokens. YouTube captions require yt-dlp, without audio processing.
+URLs require yt-dlp; YouTube may also need a JavaScript runtime such as Deno.
 
 Use @FILE to read options and inputs from a file of shell-style words; @@ escapes a literal @.
 Boolean transcription flags accept a --no- prefix, such as --no-merge, to override presets.

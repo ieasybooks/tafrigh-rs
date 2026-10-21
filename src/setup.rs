@@ -163,10 +163,12 @@ impl Tools {
 }
 
 /// Checks the external programs this run needs, reporting every unavailable one at once
-/// with how to fix it. yt-dlp is only checked when given (i.e. when there are URL inputs).
-pub async fn check_tools(decoder: &Decoder, ytdlp: Option<&YtDlp>) -> anyhow::Result<()> {
+/// with how to fix it. Only supplied tools are checked: captions need yt-dlp but no decoder.
+pub async fn check_tools(decoder: Option<&Decoder>, ytdlp: Option<&YtDlp>) -> anyhow::Result<()> {
     let mut problems = Vec::new();
-    if let Err(err) = decoder.check() {
+    if let Some(decoder) = decoder
+        && let Err(err) = decoder.check()
+    {
         problems.push(describe_unavailable(
             &err,
             "",
@@ -220,7 +222,7 @@ mod tests {
     use crate::cli::{Cli, Command};
 
     fn formats(flags: &[&str]) -> anyhow::Result<Vec<String>> {
-        let mut argv = vec!["tafrigh", "-w", "t"];
+        let mut argv = vec!["tafrigh", "--transcriber", "wit", "-w", "t"];
         argv.extend_from_slice(flags);
         argv.push("x.mp3");
         let argv: Vec<_> = argv.iter().map(std::ffi::OsStr::new).collect();

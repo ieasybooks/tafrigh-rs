@@ -1,5 +1,6 @@
 //! Resolving user inputs into media items.
 
+mod captions;
 mod local;
 mod ytdlp;
 
@@ -9,6 +10,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
+pub use captions::{is_subtitle_language, is_youtube_url};
 pub(crate) use local::discover_local;
 pub use local::{MEDIA_EXTENSIONS, expand_local, is_media_path};
 pub use ytdlp::YtDlp;

@@ -1,4 +1,4 @@
-//! `tafrigh`: transcribe audio, video and playlists into subtitles and text with Wit.ai.
+//! `tafrigh`: transcribe with Wit.ai or retrieve existing [YouTube](https://www.youtube.com) captions.
 
 mod cli;
 mod command;
@@ -83,24 +83,41 @@ async fn run(args: Args, output_mode: OutputMode, ui: &Ui) -> anyhow::Result<Exi
         .collect();
     // Before anything touches the network, so a missing program fails fast.
     let output = args.output.writer()?;
-    let decoder = args.tools.decoder();
     let ytdlp = args.tools.ytdlp(output.dir())?;
-    setup::check_tools(&decoder, inputs.iter().any(Input::is_url).then_some(&ytdlp)).await?;
+    let builder = match args.transcriber {
+        cli::Transcriber::Wit => {
+            let decoder = args.tools.decoder();
+            setup::check_tools(
+                Some(&decoder),
+                inputs.iter().any(Input::is_url).then_some(&ytdlp),
+            )
+            .await?;
+            let segmenter = args.segmentation.segmenter()?;
+            let recognizer =
+                WitRecognizer::new(args.wit.config(args.segmentation.request_seconds()))
+                    .await
+                    .context("setting up Wit.ai")?;
+            tracing::info!(
+                "Wit.ai: {} token(s), language {}",
+                args.wit.tokens.len(),
+                recognizer.language()
+            );
+            let transcriber =
+                ChunkedTranscriber::new(segmenter, recognizer, args.segmentation.chunk_options())?
+                    .with_decoder(decoder);
+            Tafrigh::builder(transcriber)
+        }
+        cli::Transcriber::Youtube => {
+            setup::check_tools(None, Some(&ytdlp)).await?;
+            Tafrigh::youtube(
+                args.subtitle_language
+                    .as_deref()
+                    .expect("validated subtitle language"),
+            )
+        }
+    };
 
-    let segmenter = args.segmentation.segmenter()?;
-    let recognizer = WitRecognizer::new(args.wit.config(args.segmentation.request_seconds()))
-        .await
-        .context("setting up Wit.ai")?;
-    tracing::info!(
-        "Wit.ai: {} token(s), language {}",
-        args.wit.tokens.len(),
-        recognizer.language()
-    );
-    let transcriber =
-        ChunkedTranscriber::new(segmenter, recognizer, args.segmentation.chunk_options())?
-            .with_decoder(decoder);
-
-    let tafrigh = Tafrigh::builder(transcriber)
+    let tafrigh = builder
         .recursive(args.recursive)
         .output(output)
         .output_mode(output_mode)

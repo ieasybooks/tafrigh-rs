@@ -1,6 +1,6 @@
 # tafrigh
 
-Transcribe audio and video into subtitles and text with [Wit.ai](https://wit.ai). A Rust rewrite of [tafrigh](https://github.com/ieasybooks/tafrigh).
+Transcribe audio and video with [Wit.ai](https://wit.ai), or retrieve existing YouTube captions. A Rust rewrite of [tafrigh](https://github.com/ieasybooks/tafrigh).
 
 Works with files, folders, and URLs supported by yt-dlp. Writes txt, srt, vtt, csv, tsv, and json, with optional word-level timings.
 
@@ -14,7 +14,7 @@ cargo install tafrigh-cli --locked
 
 Also install:
 
-- [ffmpeg](https://ffmpeg.org/download.html) for all transcription.
+- [ffmpeg](https://ffmpeg.org/download.html) for Wit transcription.
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Installation) for URLs.
 - [Deno](https://deno.com) or [Node.js 22+](https://nodejs.org) for YouTube ([Node setup](https://github.com/ieasybooks/tafrigh-rs/blob/main/docs/guide.md#javascript-runtime-for-youtube)).
 
@@ -22,15 +22,25 @@ From this checkout, `mise install ffmpeg yt-dlp` installs the latest stable ffmp
 
 ## Usage
 
-Create an app on [wit.ai](https://wit.ai) in the language you want to transcribe, then copy its **Client Access Token** from the app's settings. You can supply multiple tokens from apps using the same language to increase throughput.
+Choose `--transcriber wit` or `--transcriber youtube` explicitly for each run. Backends never switch automatically.
+
+For Wit, create an app on [wit.ai](https://wit.ai) in the language you want to transcribe, then copy its **Client Access Token** from the app's settings. You can supply multiple tokens from apps using the same language to increase throughput.
 
 ```sh
 export TAFRIGH_WIT_TOKENS=TOKEN_A,TOKEN_B
 
-tafrigh lecture.mp3
-tafrigh lectures/ -r -o transcripts -f srt,txt
-tafrigh "https://www.youtube.com/playlist?list=…" --skip-existing
+tafrigh lecture.mp3 --transcriber wit
+tafrigh lectures/ --transcriber wit -r -o transcripts -f srt,txt
+tafrigh "https://www.youtube.com/playlist?list=…" --transcriber wit --skip-existing
 ```
+
+For existing YouTube captions, select one subtitle language. This requires yt-dlp, with no Wit tokens or ffmpeg:
+
+```sh
+tafrigh "https://www.youtube.com/watch?v=…" --transcriber youtube --subtitle-language ar -f txt,srt
+```
+
+Manual captions take precedence over original automatic captions. Missing captions fail that item; playlists continue. See the [YouTube captions guide](docs/guide.md#youtube-captions) for word timings and output placement.
 
 Transcripts go beside the input by default. Use `-o` for a mirrored output folder and `-r` to include subfolders. `--skip-existing` skips an item only when all requested outputs exist; existing outputs are otherwise overwritten.
 

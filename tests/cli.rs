@@ -102,7 +102,14 @@ fn invalid_arguments_fail_before_tool_setup() {
     ] {
         let output = command()
             .env("PATH", "")
-            .args(["transcribe", "recording.mp3", "-w", "test"])
+            .args([
+                "transcribe",
+                "recording.mp3",
+                "--transcriber",
+                "wit",
+                "-w",
+                "test",
+            ])
             .args(&args)
             .output()
             .unwrap();
@@ -119,12 +126,14 @@ fn invalid_arguments_fail_before_tool_setup() {
 }
 
 #[test]
-fn inputs_and_nonblank_tokens_are_required_only_for_transcription() {
+fn inputs_backend_and_wit_tokens_are_required_for_wit_transcription() {
     for args in [
         vec![],
         vec!["transcribe"],
         vec!["recording.mp3"],
-        vec!["recording.mp3", "-w", "   "],
+        vec!["recording.mp3", "-w", "test"],
+        vec!["recording.mp3", "--transcriber", "wit"],
+        vec!["recording.mp3", "--transcriber", "wit", "-w", "   "],
     ] {
         let output = command().env("PATH", "").args(&args).output().unwrap();
         assert_eq!(
@@ -133,6 +142,42 @@ fn inputs_and_nonblank_tokens_are_required_only_for_transcription() {
             "{args:?}: {}",
             stderr(&output)
         );
+    }
+}
+
+#[test]
+fn youtube_requires_an_exact_language_and_youtube_inputs_before_tool_setup() {
+    for (input, flags, expected) in [
+        ("https://youtu.be/video", vec![], "--subtitle-language"),
+        (
+            "https://youtu.be/video",
+            vec!["--subtitle-language", "ar.*"],
+            "language code",
+        ),
+        (
+            "https://youtu.be/video",
+            vec!["--subtitle-language", "all"],
+            "language code",
+        ),
+        (
+            "recording.mp3",
+            vec!["--subtitle-language", "ar"],
+            "YouTube URLs",
+        ),
+        (
+            "https://example.com/video",
+            vec!["--subtitle-language", "ar"],
+            "YouTube URLs",
+        ),
+    ] {
+        let output = command()
+            .env("PATH", "")
+            .args([input, "--transcriber", "youtube"])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+        assert!(stderr(&output).contains(expected), "{}", stderr(&output));
     }
 }
 
@@ -273,7 +318,7 @@ async fn transcribes_with_env_credentials_nested_presets_and_explicit_overrides(
     std::fs::create_dir(dir.path().join("presets")).unwrap();
     std::fs::write(
         dir.path().join("presets/base.args"),
-        "--vad none --max-chunk 1 --pad 0 --resend-gaps 0 -f txt --words --wit-attempts 1",
+        "--transcriber wit --vad none --max-chunk 1 --pad 0 --resend-gaps 0 -f txt --words --wit-attempts 1",
     )
     .unwrap();
     std::fs::write(
@@ -311,4 +356,243 @@ async fn transcribes_with_env_credentials_nested_presets_and_explicit_overrides(
     );
     assert!(!dir.path().join("old-output").exists());
     assert!(!stderr(&output).contains("test-token"));
+}
+
+#[cfg(unix)]
+mod youtube {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    fn fake_ytdlp(dir: &Path) -> PathBuf {
+        let script = dir.join("yt-dlp");
+        std::fs::write(&script, r#"#!/bin/sh
+if [ "$1" = --version ]; then printf 'test\n'; exit 0; fi
+printf '%s\n' call "$@" >> "$TAFRIGH_TEST_YTDLP_LOG"
+flat=no
+skip=no
+metadata=
+template=
+language=
+previous=
+for arg in "$@"; do
+  case "$previous" in
+    --load-info-json) metadata=$arg ;;
+    --output) template=$arg ;;
+    --sub-langs) language=$arg ;;
+  esac
+  case "$arg" in
+    --flat-playlist) flat=yes ;;
+    --skip-download) skip=yes ;;
+    --no-skip-download) skip=no ;;
+  esac
+  previous=$arg
+  url=$arg
+done
+if [ "$skip" != yes ]; then printf 'ERROR: attempted audio download\n' >&2; exit 1; fi
+if [ "$flat" = yes ]; then
+  if [ "$TAFRIGH_TEST_CAPTIONS" = playlist ]; then
+    printf '%s\n' '{"entries":[{"id":"missing","webpage_url":"https://youtu.be/missing"},{"id":"video","webpage_url":"https://youtu.be/video"}]}'
+  else
+    printf '%s\n' '{"id":"video","webpage_url":"https://youtu.be/video"}'
+  fi
+elif [ -n "$metadata" ]; then
+  printf 'metadata:%s\n' "$metadata" >> "$TAFRIGH_TEST_YTDLP_LOG"
+  if [ "$language" != ar ]; then printf 'ERROR: wrong language\n' >&2; exit 1; fi
+  if [ "$TAFRIGH_TEST_CAPTIONS" = nofile ]; then exit 0; fi
+  template=${template#subtitle:}
+  prefix=${template%'%(ext)s'}
+  target=${prefix}${language}.json3
+  if [ "$TAFRIGH_TEST_CAPTIONS" = malformed ]; then
+    printf 'not json\n' > "$target"
+  elif [ "$TAFRIGH_TEST_CAPTIONS" = empty ]; then
+    printf '%s\n' '{"events":[]}' > "$target"
+  elif [ "$TAFRIGH_TEST_CAPTIONS" = untimed ]; then
+    printf '%s\n' '{"events":[{"tStartMs":1000,"dDurationMs":2000,"segs":[{"utf8":"hello world"}]}]}' > "$target"
+  else
+    printf '%s\n' '{"events":[{"tStartMs":1000,"dDurationMs":2000,"segs":[{"utf8":"hello"},{"utf8":" world","tOffsetMs":700}]}]}' > "$target"
+  fi
+else
+  if [ "$url" = https://youtu.be/missing ]; then
+    printf '%s\n' '{"extractor_key":"Youtube","subtitles":{},"automatic_captions":{}}'
+  else
+    printf '%s\n' '{"id":"video","extractor_key":"Youtube","subtitles":{"ar":[{"ext":"json3","url":"https://www.youtube.com/api/timedtext?lang=ar"}]}}'
+    if [ "$TAFRIGH_TEST_CAPTIONS" = failed ]; then
+      printf 'ERROR: caption request failed\n' >&2
+      exit 1
+    fi
+  fi
+fi
+"#).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    fn caption_command(dir: &Path, scenario: &str) -> Command {
+        let mut cmd = command();
+        cmd.current_dir(dir)
+            .env("PATH", "")
+            .env("TAFRIGH_TEST_YTDLP_LOG", dir.join("calls.log"))
+            .env("TAFRIGH_TEST_CAPTIONS", scenario)
+            .args([
+                "https://youtu.be/video",
+                "--transcriber",
+                "youtube",
+                "--subtitle-language",
+                "ar",
+                "--ffmpeg",
+                "missing-ffmpeg",
+                "--wit-api-url",
+                "http://127.0.0.1:9",
+                "--quiet",
+                "--yt-dlp",
+            ])
+            .arg(fake_ytdlp(dir));
+        cmd
+    }
+
+    #[test]
+    fn writes_all_formats_and_available_words_without_audio_or_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = caption_command(dir.path(), "timed")
+            .args(["--words", "--sample", "1"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "");
+        for ext in [
+            "txt",
+            "srt",
+            "vtt",
+            "csv",
+            "tsv",
+            "json",
+            "words.srt",
+            "words.vtt",
+            "words.csv",
+            "words.tsv",
+            "words.json",
+        ] {
+            assert!(
+                dir.path().join(format!("video.{ext}")).is_file(),
+                "missing {ext}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("video.txt")).unwrap(),
+            "hello world\n"
+        );
+        let words = std::fs::read_to_string(dir.path().join("video.words.srt")).unwrap();
+        assert!(
+            words.contains("00:00:01,000 --> 00:00:01,700\nhello"),
+            "{words}"
+        );
+        assert!(
+            words.contains("00:00:01,700 --> 00:00:03,000\nworld"),
+            "{words}"
+        );
+        let sample = std::fs::read_to_string(dir.path().join("sample.csv")).unwrap();
+        assert!(sample.contains("https://youtu.be/video?t=1,"), "{sample}");
+        assert!(!sample.contains(".json3"));
+        let calls = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
+        for path in calls
+            .lines()
+            .filter_map(|line| line.strip_prefix("metadata:"))
+        {
+            assert!(!Path::new(path).exists(), "temporary metadata remains");
+        }
+        assert!(!calls.contains("bestaudio"));
+    }
+
+    #[test]
+    fn missing_captions_fail_the_item_and_continue_the_playlist_without_wit() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = caption_command(dir.path(), "playlist")
+            .env("TAFRIGH_WIT_TOKENS", "must-not-use")
+            .args(["-f", "txt", "-o", "out"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("1 transcribed, 1 failed"),
+            "{}",
+            stderr(&output)
+        );
+        assert!(stderr(&output).contains("no original captions"));
+        assert!(!stderr(&output).contains("setting up Wit"));
+        assert!(!dir.path().join("out/missing.txt").exists());
+        assert!(dir.path().join("out/video.txt").is_file());
+        let calls = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
+        assert!(!calls.contains("bestaudio"));
+    }
+
+    #[test]
+    fn skip_existing_uses_current_names_and_does_not_fetch_captions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("video.txt"), "existing transcript\n").unwrap();
+        let output = caption_command(dir.path(), "failed")
+            .args(["--skip-existing", "-f", "txt"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stderr(&output).contains("1 skipped"));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("video.txt")).unwrap(),
+            "existing transcript\n"
+        );
+        let calls = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
+        assert_eq!(calls.lines().filter(|line| *line == "call").count(), 1);
+    }
+
+    #[test]
+    fn failed_empty_and_malformed_downloads_do_not_create_transcripts() {
+        for (scenario, expected) in [
+            ("failed", "caption request failed"),
+            ("nofile", "reading downloaded"),
+            ("empty", "empty captions"),
+            ("malformed", "invalid YouTube JSON3"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let output = caption_command(dir.path(), scenario)
+                .args(["-f", "txt"])
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(3),
+                "{scenario}: {}",
+                stderr(&output)
+            );
+            assert!(
+                stderr(&output).contains(expected),
+                "{scenario}: {}",
+                stderr(&output)
+            );
+            assert!(!dir.path().join("video.txt").exists());
+        }
+    }
+
+    #[test]
+    fn preserves_download_directory_and_warns_when_words_are_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = caption_command(dir.path(), "untimed")
+            .args([
+                "--download-dir",
+                "captions",
+                "-f",
+                "srt",
+                "--words",
+                "--yt-dlp-args",
+                "--no-skip-download --sub-langs en --sub-format vtt",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stderr(&output).contains("no word timings"));
+        assert!(dir.path().join("captions/video.srt").is_file());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("captions/video.words.srt")).unwrap(),
+            ""
+        );
+    }
 }

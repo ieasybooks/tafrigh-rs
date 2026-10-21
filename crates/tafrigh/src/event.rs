@@ -134,6 +134,11 @@ pub enum Event {
         /// The item.
         item: ItemInfo,
     },
+    /// Existing [YouTube](https://www.youtube.com) captions are being retrieved without downloading audio.
+    FetchingCaptions {
+        /// The item.
+        item: ItemInfo,
+    },
     /// Transcription progress of an item.
     Transcribing {
         /// The item.

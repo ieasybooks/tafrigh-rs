@@ -11,12 +11,13 @@ use usage_rs::{ValidationError, ValueEnum};
 
 /// Tool requirements and reusable argument-file syntax.
 const HELP_FOOTER: &str = "\
-Requires ffmpeg, plus yt-dlp for URLs (and a JavaScript runtime such as Deno for YouTube).
+Wit requires ffmpeg and Wit tokens. YouTube captions require yt-dlp, without audio processing.
+URLs require yt-dlp; YouTube may also need a JavaScript runtime such as Deno.
 
 Use @FILE to read options and inputs from a file of shell-style words; @@ escapes a literal @.
 Boolean transcription flags accept a --no- prefix, such as --no-merge, to override presets.";
 
-/// Transcribe audio and video into subtitles and text with Wit.ai.
+/// Transcribe with Wit.ai or retrieve existing YouTube captions.
 ///
 /// Transcription is the default command. Use completions to set up your shell, or
 /// spec to export the CLI definition for documentation and other Usage tools.
@@ -37,7 +38,7 @@ Boolean transcription flags accept a --no- prefix, such as --no-merge, to overri
     exit_code(0, "Success"),
     exit_code(1, "Setup, filesystem or other runtime error"),
     exit_code(2, "Invalid arguments"),
-    example("tafrigh lecture.mp3 -w TOKEN", help = "Transcribe a local recording"),
+    example("tafrigh lecture.mp3 --transcriber wit -w TOKEN", help = "Transcribe a local recording"),
     example("tafrigh completions zsh --install", help = "Install shell completions")
 )]
 pub struct Cli {
@@ -83,10 +84,11 @@ pub struct Completions {
     pub dry_run: bool,
 }
 
-/// Transcribe audio and video into subtitles and text with Wit.ai.
+/// Transcribe with Wit.ai or retrieve existing YouTube captions.
 ///
 /// Inputs can be media files, folders of media files, or URLs (videos, playlists,
-/// channels; anything yt-dlp supports).
+/// channels; anything yt-dlp supports). The youtube transcriber accepts only YouTube
+/// URLs and existing captions in --subtitle-language; it never invokes Wit.
 #[derive(Debug, Clone, usage_rs::Args)]
 #[usage(
     unknown_flags = "error",
@@ -94,14 +96,23 @@ pub struct Completions {
     after_help = HELP_FOOTER,
     exit_code(3, "Finished, but some inputs or items failed"),
     exit_code(130, "Interrupted with Ctrl-C"),
-    example("tafrigh transcribe lectures/ -r -o transcripts -f srt,txt -w TOKEN", help = "Mirror a folder of recordings"),
-    example("tafrigh transcribe lecture.mp3 -f srt --words -w TOKEN", help = "Include word-level subtitles"),
-    example("tafrigh transcribe https://example.com/playlist --skip-existing -w TOKEN", help = "Resume a playlist")
+    example("tafrigh transcribe lectures/ --transcriber wit -r -o transcripts -f srt,txt -w TOKEN", help = "Mirror a folder of recordings"),
+    example("tafrigh transcribe lecture.mp3 --transcriber wit -f srt --words -w TOKEN", help = "Include word-level subtitles"),
+    example("tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID --transcriber youtube --subtitle-language ar", help = "Retrieve existing Arabic captions")
 )]
 pub struct Args {
     /// Files, folders or URLs to transcribe.
     #[usage(arg, required, name = "INPUT", value_hint = usage_rs::ValueHint::AnyPath)]
     pub inputs: Vec<String>,
+
+    /// Backend to use for the entire run. Required; no automatic switching.
+    #[usage(long, value_enum, value_name = "BACKEND")]
+    pub transcriber: Transcriber,
+
+    /// One exact YouTube subtitle language (e.g. ar or en-US); required with --transcriber
+    /// youtube. Prefers manual captions, then original automatic captions; never translates.
+    #[usage(long, value_name = "LANG")]
+    pub subtitle_language: Option<String>,
 
     /// Include media in subdirectories. Directory symlinks are not followed.
     #[usage(short = 'r', long, negate = "no-recursive")]
@@ -126,6 +137,15 @@ pub struct Args {
 
     #[usage(flatten, next_help_heading = "Downloads and tools")]
     pub tools: Tools,
+}
+
+/// Explicit transcription backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Transcriber {
+    /// Recognize audio with Wit.ai; requires Wit tokens and ffmpeg.
+    Wit,
+    /// Retrieve existing YouTube captions; missing captions fail the item.
+    Youtube,
 }
 
 /// Where transcripts go and what they contain.
@@ -325,8 +345,7 @@ pub struct Wit {
         env = "TAFRIGH_WIT_TOKENS",
         value_hint = usage_rs::ValueHint::Other,
         hide_env_values,
-        delimiter = ',',
-        required
+        delimiter = ','
     )]
     pub tokens: Vec<String>,
 
@@ -401,7 +420,7 @@ pub struct Tools {
     #[usage(long, value_name = "PATH", default = "yt-dlp", value_hint = usage_rs::ValueHint::ExecutablePath, env = "TAFRIGH_YT_DLP")]
     pub yt_dlp: PathBuf,
 
-    /// ffmpeg executable (required).
+    /// ffmpeg executable (required with --transcriber wit).
     #[usage(long, value_name = "PATH", default = "ffmpeg", value_hint = usage_rs::ValueHint::ExecutablePath, env = "TAFRIGH_FFMPEG")]
     pub ffmpeg: PathBuf,
 
@@ -419,6 +438,34 @@ fn validate(cli: &Cli) -> Result<(), ValidationError> {
     args.output
         .formats()
         .map_err(|error| ValidationError::field("--format").reason(error.to_string()))?;
+
+    if let Some(extra) = &args.tools.yt_dlp_args {
+        shell_words::split(extra)
+            .map_err(|error| ValidationError::field("--yt-dlp-args").reason(error.to_string()))?;
+    }
+    if args.transcriber == Transcriber::Youtube {
+        let language = args.subtitle_language.as_deref().ok_or_else(|| {
+            ValidationError::field("--subtitle-language")
+                .reason("is required with --transcriber youtube")
+        })?;
+        if !tafrigh::source::is_subtitle_language(language) {
+            return Err(ValidationError::field("--subtitle-language")
+                .reason("expected one language code, such as ar or en-US; patterns and lists are not supported"));
+        }
+        if args
+            .inputs
+            .iter()
+            .any(|input| !tafrigh::source::is_youtube_url(input))
+        {
+            return Err(ValidationError::field("INPUT")
+                .reason("--transcriber youtube requires YouTube URLs"));
+        }
+        return Ok(());
+    }
+    if args.subtitle_language.is_some() {
+        return Err(ValidationError::field("--subtitle-language")
+            .reason("requires --transcriber youtube; use --wit-language for Wit"));
+    }
 
     let segmentation = &args.segmentation;
     for (name, value, allow_zero) in [
@@ -481,10 +528,6 @@ fn validate(cli: &Cli) -> Result<(), ValidationError> {
                 "chunk plus padding exceeds the {max_audio}s Wit audio limit"
             )));
     }
-    if let Some(extra) = &args.tools.yt_dlp_args {
-        shell_words::split(extra)
-            .map_err(|error| ValidationError::field("--yt-dlp-args").reason(error.to_string()))?;
-    }
     Ok(())
 }
 
@@ -505,6 +548,8 @@ mod tests {
     #[test]
     fn parses_lists_counts_defaults_and_hyphenated_values() {
         let args = parse(&[
+            "--transcriber",
+            "wit",
             "-w",
             "a,b",
             "-w",
@@ -543,8 +588,15 @@ mod tests {
     #[test]
     fn direct_and_explicit_transcription_share_defaults() {
         for command in [
-            vec!["recording.mp3", "-w", "test"],
-            vec!["transcribe", "recording.mp3", "-w", "test"],
+            vec!["recording.mp3", "--transcriber", "wit", "-w", "test"],
+            vec![
+                "transcribe",
+                "recording.mp3",
+                "--transcriber",
+                "wit",
+                "-w",
+                "test",
+            ],
         ] {
             let args = parse(&command);
             assert_eq!(args.output.formats, [FormatChoice::All]);
@@ -560,6 +612,8 @@ mod tests {
     fn later_options_override_presets() {
         let args = parse(&[
             "recording.mp3",
+            "--transcriber",
+            "wit",
             "-w",
             "test",
             "-o",
@@ -598,6 +652,11 @@ mod tests {
     #[test]
     fn completions_offer_choices_and_appropriate_path_kinds() {
         use usage_rs::test::{self as harness, Files};
+
+        assert_eq!(
+            harness::candidates(Cli::spec(), "tafrigh --transcriber y"),
+            ["youtube"]
+        );
 
         assert!(
             harness::candidates(Cli::spec(), "tafrigh transcribe --format w")

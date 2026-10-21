@@ -7,10 +7,28 @@ See the [README](../README.md) for installation and basic usage, or the [CLI ref
 yt-dlp supports [Node.js 22 or newer](https://github.com/yt-dlp/yt-dlp/wiki/EJS#node). Install Node, then enable it through tafrigh's yt-dlp options:
 
 ```sh
-tafrigh "https://www.youtube.com/watch?v=…" --yt-dlp-args="--no-js-runtimes --js-runtimes node"
+tafrigh "https://www.youtube.com/watch?v=…" --transcriber youtube --subtitle-language ar --yt-dlp-args="--no-js-runtimes --js-runtimes node"
 ```
 
 `--no-js-runtimes` clears yt-dlp's default Deno selection so Node is used even when both are installed. To reuse this setting, put the runtime options in your [yt-dlp configuration file](https://github.com/yt-dlp/yt-dlp#configuration), or put the `--yt-dlp-args` option above in a tafrigh argument file.
+
+## YouTube captions
+
+Every transcription command requires `--transcriber wit` or `--transcriber youtube`. YouTube retrieves existing captions through yt-dlp and requires `--subtitle-language` with one exact language code, such as `ar` or `en-US`. It accepts YouTube video, playlist and channel URLs. It does not require Wit tokens, ffmpeg or Silero, and does not download audio.
+
+```sh
+tafrigh "https://www.youtube.com/watch?v=…" --transcriber youtube --subtitle-language ar -f txt,srt
+tafrigh "https://www.youtube.com/playlist?list=…" --transcriber youtube --subtitle-language ar -o transcripts --skip-existing
+tafrigh "https://youtu.be/…" --transcriber youtube --subtitle-language ar -f srt --words
+```
+
+Manual captions in the requested language take precedence over original automatic captions. Automatically translated tracks are not selected. A missing, empty, malformed or failed caption download fails that item, and the run continues with the remaining playlist items. There is no fallback to Wit.
+
+Caption cues are converted into the same segments used by all six output formats. When JSON3 includes usable word start offsets, `--words` also writes word outputs. Each word ends at the next word's start, and the last word ends at the caption's end. Multiword fragments without individual offsets remain caption-level text. If the track has no usable word timings, tafrigh warns and writes empty word outputs, as it does with other transcribers.
+
+Outputs use `<video id>.<format>`, such as `VIDEO_ID.txt` and `VIDEO_ID.words.srt`, with no backend or language suffix. Without `-o`, they go in `--download-dir` or the current directory. With `-o`, they go directly into that output directory. Raw JSON3 and intermediate metadata are temporary; custom yt-dlp output templates do not rename the final transcripts. Samples retain the YouTube link and leave the local media file column empty.
+
+Pass cookies, JavaScript runtime settings and playlist selection through `--yt-dlp-args`. Caption retrieval enforces its download mode, selected track and temporary output paths after those arguments. Audio-processing and Wit options apply only to the Wit backend.
 
 ## Inputs and outputs
 
@@ -19,13 +37,13 @@ Create an app on [wit.ai](https://wit.ai) in the language you want to transcribe
 ```sh
 export TAFRIGH_WIT_TOKENS=TOKEN_A,TOKEN_B   # or pass -w TOKEN
 
-tafrigh lecture.mp3                           # every format, beside the media file
-tafrigh lectures/ -o transcripts -f srt,txt    # mirror the input folder
-tafrigh "https://www.youtube.com/playlist?list=…" --skip-existing
-tafrigh lecture.mp3 -f srt --words            # also lecture.words.srt, one cue per word
-tafrigh lectures/ -r -o transcripts           # include nested folders
-tafrigh lectures/ -r -o transcripts --output-mode flat
-tafrigh lectures/ --merge                     # fewer, longer requests
+tafrigh lecture.mp3 --transcriber wit                           # every format, beside the media file
+tafrigh lectures/ --transcriber wit -o transcripts -f srt,txt    # mirror the input folder
+tafrigh "https://www.youtube.com/playlist?list=…" --transcriber wit --skip-existing
+tafrigh lecture.mp3 --transcriber wit -f srt --words            # also lecture.words.srt, one cue per word
+tafrigh lectures/ --transcriber wit -r -o transcripts           # include nested folders
+tafrigh lectures/ --transcriber wit -r -o transcripts --output-mode flat
+tafrigh lectures/ --transcriber wit --merge                     # fewer, longer requests
 ```
 
 Directories are scanned one level deep by default. Use `-r` / `--recursive` to include subdirectories. Recursive discovery skips directory symlinks and an output directory nested inside an input directory.
@@ -38,9 +56,9 @@ Outputs are named `<name>.<format>`. Choose their destination with `--output-mod
 | `tree-to-tree` | One mirrored tree with every format together | Required; this is the default with `-o` |
 | `flat` | Every transcript directly in the output folder | Required |
 
-For example, `tafrigh lectures/ -r -o out` writes `lectures/course/01.mp3` as `out/course/01.srt`. With multiple directory inputs, each root gets its own folder: `tafrigh lectures/ interviews/ -r -o out` writes under `out/lectures/` and `out/interviews/`. Roots with the same name get numeric suffixes. Individually supplied files and URL inputs go directly in `out` in tree mode.
+For example, `tafrigh lectures/ --transcriber wit -r -o out` writes `lectures/course/01.mp3` as `out/course/01.srt`. With multiple directory inputs, each root gets its own folder: `tafrigh lectures/ interviews/ --transcriber wit -r -o out` writes under `out/lectures/` and `out/interviews/`. Roots with the same name get numeric suffixes. Individually supplied files and URL inputs go directly in `out` in tree mode.
 
-Downloads go to `--download-dir` when given, otherwise to `-o` or the current directory. Side-by-side URL transcripts follow the actual downloaded file's directory and basename, including custom yt-dlp output templates. In tree and flat modes, URL transcripts use the video ID.
+Wit audio downloads go to `--download-dir` when given, otherwise to `-o` or the current directory. Side-by-side URL transcripts follow the actual downloaded file's directory and basename, including custom yt-dlp output templates. In tree and flat modes, URL transcripts use the video ID. YouTube caption placement is described [above](#youtube-captions).
 
 Names gain `-2`, `-3`, and so on when their destination files collide, ignoring case. Inputs are resolved before transcription so mirrored directories take precedence over conflicting transcript names. Files in different destination folders keep their names. The same placement applies to word-level and uncompacted outputs. An unusable item destination is reported as a failure while the remaining items continue.
 
@@ -54,9 +72,11 @@ To retain the flat layout from version 0.0.1, pass `--output-mode flat -o DIR` (
 
 When resuming, keep the same inputs, order, and output settings. Changes to which colliding inputs are discovered or downloaded can change their numeric suffixes between runs.
 
+Backend and language are not part of filenames. Use separate output directories when keeping multiple languages or comparing Wit and YouTube results; `--skip-existing` treats an existing file as complete regardless of which backend or language produced it.
+
 ## Help and shell completions
 
-The CLI uses [Usage](https://usage.jdx.dev/rust/). Transcription is the default command: `tafrigh lecture.mp3` and `tafrigh transcribe lecture.mp3` do the same thing. Use `-h` for brief help, `--help` for detailed help with examples, or read the [complete CLI reference](cli.md). A [man page](tafrigh.1) is also included in release archives (`man ./docs/tafrigh.1`). Help, completions and specification export work without Wit tokens or media tools.
+The CLI uses [Usage](https://usage.jdx.dev/rust/). Transcription is the default command: `tafrigh lecture.mp3 --transcriber wit` and `tafrigh transcribe lecture.mp3 --transcriber wit` do the same thing. Use `-h` for brief help, `--help` for detailed help with examples, or read the [complete CLI reference](cli.md). A [man page](tafrigh.1) is also included in release archives (`man ./docs/tafrigh.1`). Help, completions and specification export work without selecting a backend, Wit tokens or media tools.
 
 Generate a completion script or install it into your shell's user directory:
 
@@ -73,6 +93,7 @@ Supported shells: `bash`, `elvish`, `fish`, `nu` (Nushell), `powershell`, and `z
 Use `@FILE` to read arguments from a UTF-8 file. For example, save this as `arabic.args`:
 
 ```text
+--transcriber wit
 --wit-language ar
 --format srt,txt
 --merge
@@ -86,7 +107,7 @@ tafrigh @arabic.args lectures/ -r
 tafrigh @arabic.args "lecture one.mp3" --output-dir another-folder
 ```
 
-Files contain shell-style words: quotes preserve spaces, and `#` starts a comment. They can contain inputs as well as options, and include other argument files with `@relative/path.args`. Nested argument-file paths resolve beside the containing file; media and output paths resolve from the working directory. Cycles and nesting beyond 16 files are rejected. Escape a literal leading `@` with `@@`, for example `tafrigh @@recording.wav`. These files are parsed as arguments; shell commands and environment-variable substitutions are not executed.
+Files contain shell-style words: quotes preserve spaces, and `#` starts a comment. They can contain inputs as well as options, and include other argument files with `@relative/path.args`. Nested argument-file paths resolve beside the containing file; media and output paths resolve from the working directory. Cycles and nesting beyond 16 files are rejected. Escape a literal leading `@` with `@@`, for example `tafrigh @@recording.wav --transcriber wit`. These files are parsed as arguments; shell commands and environment-variable substitutions are not executed.
 
 Repeated scalar options use the last value, so command-line flags after an argument file override its settings. Repeated list options such as `--format` and `--wit-token` accumulate. Boolean transcription flags have a `--no-…` counterpart, so `tafrigh @arabic.args lecture.mp3 --no-merge` turns off merging from the preset. Unknown flags and invalid option combinations are rejected before transcription starts.
 
@@ -112,6 +133,8 @@ usage generate manpage -f tafrigh.usage.kdl > tafrigh.1
 Exit codes: `0` success, `1` error, `2` invalid arguments, `3` some items failed, `130` interrupted.
 
 ## How it works
+
+With `--transcriber wit`:
 
 1. ffmpeg decodes the audio, and [Silero VAD](https://github.com/snakers4/silero-vad) finds the speech in it. ffprobe, normally shipped with ffmpeg, adds progress percentages.
 2. The speech is cut into chunks of up to 15 s by default, padded with silence, and sent to Wit across all tokens.
@@ -145,6 +168,8 @@ let segments = transcriber.transcribe("lecture.mp3".as_ref(), &NoProgress).await
 
 To process files, folders and URLs into transcript files, use `tafrigh::Tafrigh::builder`. The library retains flat output by default; use `.output_mode(tafrigh::output::OutputMode::TreeToTree)` or `SideBySide` to choose another layout, and `.recursive(true)` to include subdirectories.
 
+For captions, use `tafrigh::Tafrigh::youtube("ar")` instead of `builder(transcriber)`, then configure the same output writer and yt-dlp options. Its `run` method accepts YouTube URLs and reports per-item failures through the same `RunReport`.
+
 | Crate | What it is |
 |---|---|
 | [`tafrigh`](https://crates.io/crates/tafrigh) | the core: decoding, Silero VAD, chunking, output formats |
@@ -153,7 +178,7 @@ To process files, folders and URLs into transcript files, use `tafrigh::Tafrigh:
 
 ## Differences from the Python version
 
-- Wit.ai only; Whisper isn't supported yet.
+- Wit.ai speech recognition and existing YouTube captions; Whisper isn't supported yet.
 - Silero VAD instead of auditok, so long speech is split at pauses rather than at fixed lengths.
 - Subtitle cues follow what Wit hears, so they're shorter.
 - `--yt-dlp-args` takes yt-dlp command-line arguments instead of JSON.
