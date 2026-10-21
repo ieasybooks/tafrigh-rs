@@ -20,19 +20,17 @@ jobs:
       # Installs the toolchain pinned in rust-toolchain.toml, with rustfmt and clippy.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - name: Install media tools and Usage CLI
+        uses: jdx/mise-action@v5.2.1
+        with:
+          install_args: ffmpeg yt-dlp usage
       - name: Check workspace package versions match
         run: |
           cargo metadata --no-deps --locked --format-version 1 \
             | jq -e '([.packages[].version] | unique | length) == 1'
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      # The end-to-end tests decode audio with ffmpeg.
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: cargo test --workspace --locked
-      - name: Install Usage CLI
-        uses: jdx/mise-action@v5.2.1
-        with:
-          install_args: usage
       - name: Check generated CLI reference
         run: |
           sh scripts/cli-docs.sh

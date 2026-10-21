@@ -1,7 +1,12 @@
 [settings]
 idiomatic_version_file_enable_tools = ["rust"]
 
+[tool_alias]
+yt-dlp = "github:yt-dlp/yt-dlp-nightly-builds"
+
 [tools]
+ffmpeg = "latest"
+yt-dlp = { version = "latest", prerelease = true }
 python = "3.12"
 uv = "0.13.1"
 usage = "7.1.0"
