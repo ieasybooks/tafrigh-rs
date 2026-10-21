@@ -2,7 +2,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::SAMPLE_RATE;
 use crate::{Error, Result};
@@ -50,13 +50,15 @@ impl Decoder {
     ///
     /// `ffprobe` is optional (it only provides durations for progress percentages) and is not
     /// checked.
-    pub fn check(&self) -> Result<()> {
-        let status = Command::new(&self.ffmpeg)
+    pub async fn check(&self) -> Result<()> {
+        let status = tokio::process::Command::new(&self.ffmpeg)
             .arg("-version")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .kill_on_drop(true)
+            .status()
+            .await;
         Error::check_tool("ffmpeg", &self.ffmpeg, "-version", status)
     }
 
@@ -95,50 +97,25 @@ impl Decoder {
         })
     }
 
-    /// Container duration in seconds, if `ffprobe` is available and the file reports one.
-    pub fn probe_duration(&self, path: &Path) -> Option<f64> {
-        let mut child = Command::new(&self.ffprobe)
+    /// Container duration in seconds, if `ffprobe` is available, answers in time and the file
+    /// reports one.
+    pub async fn probe_duration(&self, path: &Path) -> Option<f64> {
+        let output = tokio::process::Command::new(&self.ffprobe)
             .args(["-v", "error", "-show_entries", "format=duration"])
             .args(["-of", "default=noprint_wrappers=1:nokey=1"])
             .arg(path)
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()
+            .kill_on_drop(true)
+            .output();
+        let output = tokio::time::timeout(self.probe_timeout, output)
+            .await
+            .ok()?
             .ok()?;
-        let mut stdout = child.stdout.take().expect("stdout is piped");
-        let reader = std::thread::spawn(move || {
-            let mut output = Vec::new();
-            let _ = stdout.read_to_end(&mut output);
-            output
-        });
-        let deadline = Instant::now() + self.probe_timeout;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    if remaining.is_zero() {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        drop(reader);
-                        return None;
-                    }
-                    std::thread::sleep(remaining.min(Duration::from_millis(10)));
-                }
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    drop(reader);
-                    return None;
-                }
-            }
-        };
-        let output = reader.join().ok()?;
-        if !status.success() {
+        if !output.status.success() {
             return None;
         }
-        String::from_utf8_lossy(&output)
+        String::from_utf8_lossy(&output.stdout)
             .trim()
             .parse::<f64>()
             .ok()
@@ -252,26 +229,26 @@ mod tests {
         }
     }
 
-    #[test]
-    fn missing_or_broken_ffmpeg_is_unavailable() {
+    #[tokio::test]
+    async fn missing_or_broken_ffmpeg_is_unavailable() {
         let missing = Decoder::new("/nonexistent/ffmpeg", "/nonexistent/ffprobe");
-        assert_eq!(kind(missing.check()), Some(ErrorKind::NotFound));
+        assert_eq!(kind(missing.check().await), Some(ErrorKind::NotFound));
         assert_eq!(
             kind(missing.open(Path::new("a.mp3"))),
             Some(ErrorKind::NotFound)
         );
-        assert_eq!(missing.probe_duration(Path::new("a.mp3")), None);
+        assert_eq!(missing.probe_duration(Path::new("a.mp3")).await, None);
 
         #[cfg(unix)]
         {
             let broken = Decoder::new("false", "false");
-            assert_eq!(kind(broken.check()), Some(ErrorKind::Other));
+            assert_eq!(kind(broken.check().await), Some(ErrorKind::Other));
         }
     }
 
     #[cfg(unix)]
-    #[test]
-    fn probe_timeout_returns_without_waiting_for_ffprobe() {
+    #[tokio::test]
+    async fn probe_timeout_returns_without_waiting_for_ffprobe() {
         use std::os::unix::fs::PermissionsExt;
 
         let temp = tempfile::tempdir().unwrap();
@@ -282,8 +259,8 @@ mod tests {
         std::fs::set_permissions(&path, permissions).unwrap();
 
         let decoder = Decoder::new("true", &path).with_probe_timeout(Duration::from_millis(200));
-        let started = Instant::now();
-        assert_eq!(decoder.probe_duration(Path::new("audio.mp3")), None);
+        let started = std::time::Instant::now();
+        assert_eq!(decoder.probe_duration(Path::new("audio.mp3")).await, None);
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

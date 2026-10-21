@@ -206,6 +206,9 @@ impl Transcriber for ChunkedTranscriber {
         media: &Path,
         progress: &dyn Progress<TranscribeEvent>,
     ) -> Result<Vec<Segment>> {
+        let duration = self.decoder.probe_duration(media).await;
+        progress.report(TranscribeEvent::Started { duration });
+
         let max_in_flight = self
             .options
             .max_in_flight
@@ -282,9 +285,6 @@ impl Transcriber for ChunkedTranscriber {
                             end: meta.end,
                         });
                         inflight.push(recognize(self.recognizer.clone(), *request));
-                    }
-                    Some(Produced::Started(duration)) => {
-                        progress.report(TranscribeEvent::Started { duration });
                     }
                     Some(Produced::Decoded(seconds)) => {
                         progress.report(TranscribeEvent::Decoded { seconds });
@@ -563,7 +563,6 @@ struct Recognized {
 }
 
 enum Produced {
-    Started(Option<f64>),
     Decoded(f64),
     Chunk(Box<Request>),
     Segmented(usize),
@@ -582,9 +581,6 @@ const BLOCK_SAMPLES: usize = SAMPLE_RATE as usize; // one second
 
 impl Producer {
     fn run(mut self) -> Result<()> {
-        let duration = self.decoder.probe_duration(&self.path);
-        self.send(Produced::Started(duration))?;
-
         let mut session = self.segmenter.begin()?;
         let mut reader = self.decoder.open(&self.path)?;
         let mut block = Vec::with_capacity(BLOCK_SAMPLES);

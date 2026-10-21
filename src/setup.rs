@@ -167,7 +167,7 @@ impl Tools {
 pub async fn check_tools(decoder: Option<&Decoder>, ytdlp: Option<&YtDlp>) -> anyhow::Result<()> {
     let mut problems = Vec::new();
     if let Some(decoder) = decoder
-        && let Err(err) = decoder.check()
+        && let Err(err) = decoder.check().await
     {
         problems.push(describe_unavailable(
             &err,
