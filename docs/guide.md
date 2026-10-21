@@ -7,19 +7,19 @@ See the [README](../README.md) for installation and basic usage, or the [CLI ref
 yt-dlp supports [Node.js 22 or newer](https://github.com/yt-dlp/yt-dlp/wiki/EJS#node). Install Node, then enable it through tafrigh's yt-dlp options:
 
 ```sh
-tafrigh "https://www.youtube.com/watch?v=…" --transcriber youtube --subtitle-language ar --yt-dlp-args="--no-js-runtimes --js-runtimes node"
+tafrigh "https://www.youtube.com/watch?v=…" --transcriber youtube --language ar --yt-dlp-args="--no-js-runtimes --js-runtimes node"
 ```
 
 `--no-js-runtimes` clears yt-dlp's default Deno selection so Node is used even when both are installed. To reuse this setting, put the runtime options in your [yt-dlp configuration file](https://github.com/yt-dlp/yt-dlp#configuration), or put the `--yt-dlp-args` option above in a tafrigh argument file.
 
 ## YouTube captions
 
-Every transcription command requires `--transcriber wit` or `--transcriber youtube`. YouTube retrieves existing captions through yt-dlp and requires `--subtitle-language` with one exact language code, such as `ar` or `en-US`. It accepts YouTube video, playlist and channel URLs. It does not require Wit tokens, ffmpeg or Silero, and does not download audio.
+Every transcription command requires `--transcriber wit` or `--transcriber youtube`. YouTube retrieves existing captions through yt-dlp and requires `--language` with one exact language code, such as `ar` or `en-US`. It accepts YouTube video, playlist and channel URLs. It does not require Wit tokens, ffmpeg or Silero, and does not download audio.
 
 ```sh
-tafrigh "https://www.youtube.com/watch?v=…" --transcriber youtube --subtitle-language ar -f txt,srt
-tafrigh "https://www.youtube.com/playlist?list=…" --transcriber youtube --subtitle-language ar -o transcripts --skip-existing
-tafrigh "https://youtu.be/…" --transcriber youtube --subtitle-language ar -f srt --words
+tafrigh "https://www.youtube.com/watch?v=…" --transcriber youtube --language ar -f txt,srt
+tafrigh "https://www.youtube.com/playlist?list=…" --transcriber youtube --language ar -o transcripts --skip-existing
+tafrigh "https://youtu.be/…" --transcriber youtube --language ar -f srt --words
 ```
 
 Manual captions in the requested language take precedence over original automatic captions. Automatically translated tracks are not selected. A missing, empty, malformed or failed caption download fails that item, and the run continues with the remaining playlist items. There is no fallback to Wit.
@@ -94,7 +94,7 @@ Use `@FILE` to read arguments from a UTF-8 file. For example, save this as `arab
 
 ```text
 --transcriber wit
---wit-language ar
+--language ar
 --format srt,txt
 --merge
 --output-dir transcripts
@@ -111,7 +111,7 @@ Files contain shell-style words: quotes preserve spaces, and `#` starts a commen
 
 Repeated scalar options use the last value, so command-line flags after an argument file override its settings. Repeated list options such as `--format` and `--wit-token` accumulate. Boolean transcription flags have a `--no-…` counterpart, so `tafrigh @arabic.args lecture.mp3 --no-merge` turns off merging from the preset. Unknown flags and invalid option combinations are rejected before transcription starts.
 
-You can also set `TAFRIGH_WIT_LANGUAGE`, `TAFRIGH_FFMPEG`, `TAFRIGH_FFPROBE`, and `TAFRIGH_YT_DLP`; explicit flags take precedence over these defaults. Keep tokens in `TAFRIGH_WIT_TOKENS` when using reusable option files. Token environment values are hidden from help and specification output.
+You can also set `TAFRIGH_FFMPEG`, `TAFRIGH_FFPROBE`, and `TAFRIGH_YT_DLP`; explicit flags take precedence over these defaults. Keep tokens in `TAFRIGH_WIT_TOKENS` when using reusable option files. Token environment values are hidden from help and specification output.
 
 ## CLI specification
 
@@ -125,7 +125,7 @@ usage generate manpage -f tafrigh.usage.kdl > tafrigh.1
 
 ## Tips
 
-- **More tokens, faster runs.** tafrigh starts one request per second per token by default; additional tokens can increase throughput. All tokens must belong to apps of the same language.
+- **More tokens, faster runs.** tafrigh starts one request per second per token by default; additional tokens can increase throughput. All tokens must belong to apps of the same language. Use `-l` / `--language` to set that language explicitly, or omit it to detect the language from the tokens.
 - **`--merge` for speed.** It sends fewer, longer requests. In the benchmark below, it roughly halved runtime with a small accuracy tradeoff.
 - **Interrupted?** Rerun the same command with `--skip-existing`; finished items are kept.
 - **A chunk that keeps failing** fails its file, so a rerun gives a complete transcript. `--on-chunk-error skip` leaves the chunk out instead.

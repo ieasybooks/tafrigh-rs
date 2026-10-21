@@ -37,7 +37,7 @@ tafrigh "https://www.youtube.com/playlist?list=…" --transcriber wit --skip-exi
 For existing YouTube captions, select one subtitle language. This requires yt-dlp, with no Wit tokens or ffmpeg:
 
 ```sh
-tafrigh "https://www.youtube.com/watch?v=…" --transcriber youtube --subtitle-language ar -f txt,srt
+tafrigh "https://www.youtube.com/watch?v=…" --transcriber youtube --language ar -f txt,srt
 ```
 
 Manual captions take precedence over original automatic captions. Missing captions fail that item; playlists continue. See the [YouTube captions guide](docs/guide.md#youtube-captions) for word timings and output placement.

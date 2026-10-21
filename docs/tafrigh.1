@@ -29,7 +29,7 @@ Print the Usage specification as KDL for docs, man pages and tooling.
 .SH "TAFRIGH TRANSCRIBE"
 Transcribe with Wit.ai or retrieve existing YouTube captions.
 
-Inputs can be media files, folders of media files, or URLs (videos, playlists, channels; anything yt\-dlp supports). The youtube transcriber accepts only YouTube URLs and existing captions in \-\-subtitle\-language; it never invokes Wit.
+Inputs can be media files, folders of media files, or URLs (videos, playlists, channels; anything yt\-dlp supports). The youtube transcriber accepts only YouTube URLs and existing captions in \-\-language; it never invokes Wit.
 .PP
 \fBUsage:\fR tafrigh transcribe [OPTIONS] <INPUT> ...
 .PP
@@ -39,8 +39,8 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
 \fB\-\-transcriber\fR \fI<BACKEND>\fR
 Backend to use for the entire run. Required; no automatic switching.
 .TP
-\fB\-\-subtitle\-language\fR \fI<LANG>\fR
-One exact YouTube subtitle language (e.g. ar or en\-US); required with \-\-transcriber youtube. Prefers manual captions, then original automatic captions; never translates.
+\fB\-l, \-\-language\fR \fI<LANG>\fR
+YouTube: required exact caption language (e.g. ar or en\-US); no patterns or lists. Prefers manual captions, then original automatic captions; never translates. Wit: language of the apps; detected from the tokens when omitted.
 .TP
 \fB\-r, \-\-recursive\fR
 Include media in subdirectories. Directory symlinks are not followed.
@@ -148,12 +148,6 @@ What to do when a chunk fails after all retries.
 Wit client access tokens (repeat or comma\-separate). All apps must share a language.
 .RS
 \fIEnvironment: \fR\fBTAFRIGH_WIT_TOKENS\fR
-.RE
-.TP
-\fB\-\-wit\-language\fR \fI<LANG>\fR
-Language of the Wit apps (e.g. ar); detected from the tokens when omitted.
-.RS
-\fIEnvironment: \fR\fBTAFRIGH_WIT_LANGUAGE\fR
 .RE
 .TP
 \fB\-\-wit\-rps\fR \fI<N>\fR
@@ -275,7 +269,7 @@ tafrigh transcribe lecture.mp3 \-\-transcriber wit \-f srt \-\-words \-w TOKEN
 Retrieve existing Arabic captions
 .PP
 .RS 4
-tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID \-\-transcriber youtube \-\-subtitle\-language ar
+tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID \-\-transcriber youtube \-\-language ar
 .RE
 .SH "TAFRIGH COMPLETIONS"
 Generate a completion script, or install it in the shell's user directory.

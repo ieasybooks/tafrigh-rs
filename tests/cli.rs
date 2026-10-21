@@ -10,7 +10,6 @@ fn command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_tafrigh"));
     for key in [
         "TAFRIGH_WIT_TOKENS",
-        "TAFRIGH_WIT_LANGUAGE",
         "TAFRIGH_FFMPEG",
         "TAFRIGH_FFPROBE",
         "TAFRIGH_YT_DLP",
@@ -76,6 +75,37 @@ fn help_and_spec_do_not_disclose_token_environment_values() {
         assert!(output.status.success(), "{}", stderr(&output));
         assert!(!stdout(&output).contains("private-test-value"));
         assert!(!stderr(&output).contains("private-test-value"));
+    }
+}
+
+#[test]
+fn removed_language_flags_are_rejected_and_the_old_environment_is_ignored() {
+    for flag in ["--subtitle-language", "--wit-language"] {
+        let output = command()
+            .args(["recording.mp3", "--transcriber", "wit", flag, "ar"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(stderr(&output).contains(flag), "{}", stderr(&output));
+    }
+    let output = command()
+        .env("TAFRIGH_WIT_LANGUAGE", "ar")
+        .args(["https://youtu.be/video", "--transcriber", "youtube"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("--language"),
+        "{}",
+        stderr(&output)
+    );
+    let spec = stdout(&command().arg("spec").output().unwrap());
+    for removed in [
+        "--subtitle-language",
+        "--wit-language",
+        "TAFRIGH_WIT_LANGUAGE",
+    ] {
+        assert!(!spec.contains(removed), "{spec}");
     }
 }
 
@@ -148,25 +178,26 @@ fn inputs_backend_and_wit_tokens_are_required_for_wit_transcription() {
 #[test]
 fn youtube_requires_an_exact_language_and_youtube_inputs_before_tool_setup() {
     for (input, flags, expected) in [
-        ("https://youtu.be/video", vec![], "--subtitle-language"),
+        ("https://youtu.be/video", vec![], "--language"),
         (
             "https://youtu.be/video",
-            vec!["--subtitle-language", "ar.*"],
+            vec!["--language", "ar.*"],
             "language code",
         ),
         (
             "https://youtu.be/video",
-            vec!["--subtitle-language", "all"],
+            vec!["--language", "all"],
             "language code",
         ),
         (
-            "recording.mp3",
-            vec!["--subtitle-language", "ar"],
-            "YouTube URLs",
+            "https://youtu.be/video",
+            vec!["-l", "ar,en"],
+            "language code",
         ),
+        ("recording.mp3", vec!["--language", "ar"], "YouTube URLs"),
         (
             "https://example.com/video",
-            vec!["--subtitle-language", "ar"],
+            vec!["--language", "ar"],
             "YouTube URLs",
         ),
     ] {
@@ -330,12 +361,13 @@ async fn transcribes_with_env_credentials_nested_presets_and_explicit_overrides(
     let mut cmd = command();
     cmd.current_dir(dir.path())
         .env("TAFRIGH_WIT_TOKENS", "test-token")
-        .env("TAFRIGH_WIT_LANGUAGE", "en")
         .env("TAFRIGH_FFMPEG", "missing-ffmpeg")
         .args([
             "@presets/batch.args",
             "@@lecture one.wav",
             "--no-words",
+            "-l",
+            "en",
             "--ffmpeg",
             "ffmpeg",
             "-o",
@@ -357,6 +389,64 @@ async fn transcribes_with_env_credentials_nested_presets_and_explicit_overrides(
     );
     assert!(!dir.path().join("old-output").exists());
     assert!(!stderr(&output).contains("test-token"));
+}
+
+#[tokio::test]
+async fn wit_detects_language_when_omitted_even_with_the_removed_environment_variable() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/apps"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"[{"lang":"en","is_app_for_token":true}]"#),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/dictation"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"is_final":true,"type":"FINAL_TRANSCRIPTION","text":"hello?","speech":{"confidence":0.9,"tokens":[]}}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    write_wav(&dir.path().join("lecture.wav"));
+    let mut cmd = command();
+    cmd.current_dir(dir.path())
+        .env("TAFRIGH_WIT_LANGUAGE", "ar")
+        .args([
+            "lecture.wav",
+            "--transcriber",
+            "wit",
+            "-w",
+            "test-token",
+            "--vad",
+            "none",
+            "--max-chunk",
+            "1",
+            "--pad",
+            "0",
+            "--resend-gaps",
+            "0",
+            "-f",
+            "txt",
+            "--wit-attempts",
+            "1",
+            "--wit-api-url",
+            &server.uri(),
+            "-q",
+        ]);
+    let output = tokio::task::spawn_blocking(move || cmd.output().unwrap())
+        .await
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("lecture.txt")).unwrap(),
+        "hello?\n"
+    );
 }
 
 #[cfg(unix)]
@@ -439,7 +529,7 @@ fi
                 "https://youtu.be/video",
                 "--transcriber",
                 "youtube",
-                "--subtitle-language",
+                "--language",
                 "ar",
                 "--ffmpeg",
                 "missing-ffmpeg",

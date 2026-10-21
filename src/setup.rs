@@ -125,12 +125,11 @@ impl TryFrom<Args> for Run {
 
 /// The captions backend: one exact language, and only URLs it supports.
 fn youtube(args: &Args) -> Result<YoutubeCaptions, ValidationError> {
-    let language = args.subtitle_language.as_deref().ok_or_else(|| {
-        ValidationError::field("--subtitle-language")
-            .reason("is required with --transcriber youtube")
+    let language = args.language.as_deref().ok_or_else(|| {
+        ValidationError::field("--language").reason("is required with --transcriber youtube")
     })?;
     let captions = YoutubeCaptions::new(language).map_err(|_| {
-        ValidationError::field("--subtitle-language").reason(
+        ValidationError::field("--language").reason(
             "expected one language code, such as ar or en-US; patterns and lists are not supported",
         )
     })?;
@@ -150,10 +149,6 @@ impl TryFrom<&Args> for WitRun {
     type Error = ValidationError;
 
     fn try_from(args: &Args) -> Result<Self, ValidationError> {
-        if args.subtitle_language.is_some() {
-            return Err(ValidationError::field("--subtitle-language")
-                .reason("requires --transcriber youtube; use --wit-language for Wit"));
-        }
         let segmentation = &args.segmentation;
         let max_chunk = duration("--max-chunk", segmentation.max_chunk, Zero::Invalid)?;
         let pad = duration("--pad", segmentation.pad, Zero::Disables)?;
@@ -181,6 +176,7 @@ impl TryFrom<&Args> for WitRun {
         let request = max_chunk.saturating_add(pad.saturating_mul(2));
         let mut wit = args.wit.config(request)?;
         wit.ffmpeg.clone_from(&args.tools.ffmpeg);
+        wit.language.clone_from(&args.language);
         if request > wit.audio_limit() {
             return Err(ValidationError::field("--max-chunk")
                 .value(segmentation.max_chunk.to_string())
@@ -333,7 +329,6 @@ impl cli::Wit {
             return Err(at_least_one("--wit-concurrency"));
         }
         let mut config = WitConfig::new(self.tokens.iter().cloned());
-        config.language.clone_from(&self.language);
         config.endpoint = self.endpoint.into();
         config.audio_format = self.audio.into();
         config.api_url.clone_from(&self.api_url);

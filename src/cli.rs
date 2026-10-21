@@ -88,7 +88,7 @@ pub struct Completions {
 ///
 /// Inputs can be media files, folders of media files, or URLs (videos, playlists,
 /// channels; anything yt-dlp supports). The youtube transcriber accepts only YouTube
-/// URLs and existing captions in --subtitle-language; it never invokes Wit.
+/// URLs and existing captions in --language; it never invokes Wit.
 #[derive(Debug, Clone, usage_rs::Args)]
 #[usage(
     unknown_flags = "error",
@@ -98,7 +98,7 @@ pub struct Completions {
     exit_code(130, "Interrupted with Ctrl-C"),
     example("tafrigh transcribe lectures/ --transcriber wit -r -o transcripts -f srt,txt -w TOKEN", help = "Mirror a folder of recordings"),
     example("tafrigh transcribe lecture.mp3 --transcriber wit -f srt --words -w TOKEN", help = "Include word-level subtitles"),
-    example("tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID --transcriber youtube --subtitle-language ar", help = "Retrieve existing Arabic captions")
+    example("tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID --transcriber youtube --language ar", help = "Retrieve existing Arabic captions")
 )]
 pub struct Args {
     /// Files, folders or URLs to transcribe.
@@ -109,10 +109,11 @@ pub struct Args {
     #[usage(long, value_enum, value_name = "BACKEND")]
     pub transcriber: Transcriber,
 
-    /// One exact YouTube subtitle language (e.g. ar or en-US); required with --transcriber
-    /// youtube. Prefers manual captions, then original automatic captions; never translates.
-    #[usage(long, value_name = "LANG")]
-    pub subtitle_language: Option<String>,
+    /// YouTube: required exact caption language (e.g. ar or en-US); no patterns or lists.
+    /// Prefers manual captions, then original automatic captions; never translates.
+    /// Wit: language of the apps; detected from the tokens when omitted.
+    #[usage(short = 'l', long, value_name = "LANG")]
+    pub language: Option<String>,
 
     /// Include media in subdirectories. Directory symlinks are not followed.
     #[usage(short = 'r', long, negate = "no-recursive")]
@@ -324,14 +325,6 @@ pub struct Wit {
     )]
     pub tokens: Vec<String>,
 
-    /// Language of the Wit apps (e.g. ar); detected from the tokens when omitted.
-    #[usage(
-        long = "wit-language",
-        value_name = "LANG",
-        env = "TAFRIGH_WIT_LANGUAGE"
-    )]
-    pub language: Option<String>,
-
     /// Request starts per second for each token.
     #[usage(long = "wit-rps", value_name = "N", default = "1.0")]
     pub requests_per_second: f64,
@@ -493,6 +486,24 @@ mod tests {
                 tafrigh::output::OutputMode::SideBySide
             );
             assert_eq!(args.segmentation.max_chunk, 15.0);
+        }
+    }
+
+    #[test]
+    fn language_is_optional_for_wit_and_accepts_both_spellings() {
+        let args = parse(&["recording.mp3", "--transcriber", "wit", "-w", "test"]);
+        assert!(args.language.is_none());
+        for flag in ["-l", "--language"] {
+            let args = parse(&[
+                "recording.mp3",
+                "--transcriber",
+                "wit",
+                "-w",
+                "test",
+                flag,
+                "ar",
+            ]);
+            assert_eq!(args.language.as_deref(), Some("ar"));
         }
     }
 

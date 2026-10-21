@@ -42,7 +42,7 @@ tafrigh completions zsh --install
 
 Transcribe with Wit.ai or retrieve existing YouTube captions.
 
-Inputs can be media files, folders of media files, or URLs (videos, playlists, channels; anything yt-dlp supports). The youtube transcriber accepts only YouTube URLs and existing captions in --subtitle-language; it never invokes Wit.
+Inputs can be media files, folders of media files, or URLs (videos, playlists, channels; anything yt-dlp supports). The youtube transcriber accepts only YouTube URLs and existing captions in --language; it never invokes Wit.
 
 ### Arguments
 - **`<INPUT>…`** — Files, folders or URLs to transcribe.
@@ -51,7 +51,7 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
 - **`--transcriber <BACKEND>`** — Backend to use for the entire run. Required; no automatic switching.
 
   **Choices:** `wit`, `youtube`
-- **`--subtitle-language <LANG>`** — One exact YouTube subtitle language (e.g. ar or en-US); required with --transcriber youtube. Prefers manual captions, then original automatic captions; never translates.
+- **`-l --language <LANG>`** — YouTube: required exact caption language (e.g. ar or en-US); no patterns or lists. Prefers manual captions, then original automatic captions; never translates. Wit: language of the apps; detected from the tokens when omitted.
 - **`-r --recursive`** — Include media in subdirectories. Directory symlinks are not followed.
 - **`-q --quiet`** — Hide progress bars.
 - **`-v --verbose`** — More logging (-v debug, -vv trace). RUST_LOG overrides.
@@ -116,9 +116,6 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
 - **`-w --wit-token <TOKEN>`** — Wit client access tokens (repeat or comma-separate). All apps must share a language.
 
   **Environment Variable:** `TAFRIGH_WIT_TOKENS`
-- **`--wit-language <LANG>`** — Language of the Wit apps (e.g. ar); detected from the tokens when omitted.
-
-  **Environment Variable:** `TAFRIGH_WIT_LANGUAGE`
 - **`--wit-rps <N>`** — Request starts per second for each token.
 
   **Default:** `1.0`
@@ -191,7 +188,7 @@ tafrigh transcribe lecture.mp3 --transcriber wit -f srt --words -w TOKEN
 Retrieve existing Arabic captions
 
 ```
-tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID --transcriber youtube --subtitle-language ar
+tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID --transcriber youtube --language ar
 ```
 
 Wit requires ffmpeg and Wit tokens. YouTube captions require yt-dlp, without audio processing.
