@@ -414,6 +414,147 @@ fn unknown_options_are_rejected_for_both_backends() {
 }
 
 #[test]
+fn local_model_options_are_rejected_by_wit_and_youtube() {
+    for (transcriber, required) in [("wit", ["-w", "test"]), ("youtube", ["-l", "ar"])] {
+        for option in ["--model", "--device", "--model-dir"] {
+            let output = command()
+                .env("PATH", "")
+                .args(["https://youtu.be/video", "--transcriber", transcriber])
+                .args(required)
+                .args([option, "x"])
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(2),
+                "{option}: {}",
+                stderr(&output)
+            );
+            assert!(
+                stderr(&output).contains(&format!(
+                    "'{option}': isn't used by --transcriber {transcriber}"
+                )),
+                "{option}: {}",
+                stderr(&output)
+            );
+        }
+    }
+}
+
+/// Runs a Cohere transcription of a missing file without tools on PATH.
+fn cohere(args: &[&str]) -> Output {
+    command()
+        .env("PATH", "")
+        .args(["transcribe", "recording.mp3", "--transcriber", "cohere"])
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+#[cfg(not(feature = "cohere"))]
+#[test]
+fn cohere_needs_a_build_with_the_cohere_feature() {
+    let output = cohere(&[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("cargo install tafrigh-cli --features cohere"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[cfg(feature = "cohere")]
+#[test]
+fn cohere_rejects_unusable_options_before_loading_a_model() {
+    for (args, expected) in [
+        (
+            vec!["-w", "token"],
+            "'--wit-token': isn't used by --transcriber cohere",
+        ),
+        (
+            vec!["--resend-gaps", "1"],
+            "'--resend-gaps': isn't used by --transcriber cohere",
+        ),
+        (
+            vec!["--no-words"],
+            "'--words': isn't used by --transcriber cohere",
+        ),
+        (
+            vec!["-f", "srt,words-srt"],
+            "needs word timings, which --transcriber cohere doesn't provide",
+        ),
+        (
+            vec!["-l", "fr"],
+            "expected ar or en with --transcriber cohere",
+        ),
+        (vec!["--device", "tpu"], "expected auto, cpu, gpu or gpu:N"),
+        (vec!["--device", "gpu:"], "expected auto, cpu, gpu or gpu:N"),
+        (
+            vec!["--model", "missing.gguf"],
+            "expected a variant (bf16, f16, q8_0, q6_k, q5_k_m, q4_k_m) or an existing .gguf file",
+        ),
+        (
+            vec!["--max-chunk", "400"],
+            "exceeds the 399.9999375s Cohere audio limit",
+        ),
+        (
+            vec!["--vad", "none", "--max-chunk", "400", "--pad", "0"],
+            "exceeds the 399.9999375s Cohere audio limit",
+        ),
+        // 7,999.5 samples of padding round up to 8,000 on each side: one sample over the limit.
+        (
+            vec!["--vad", "none", "--max-chunk", "399", "--pad", "0.49996875"],
+            "exceeds the 399.9999375s Cohere audio limit",
+        ),
+        (
+            vec!["--wit-audio", "wav"],
+            "'--wit-audio': isn't used by --transcriber cohere",
+        ),
+    ] {
+        let output = cohere(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains(expected),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[cfg(feature = "cohere")]
+#[test]
+fn cohere_accepts_its_options_and_checks_ffmpeg_before_loading_a_model() {
+    let model_dir = tempfile::tempdir().unwrap();
+    let output = cohere(&[
+        "--model",
+        "q4_k_m",
+        "--device",
+        "cpu",
+        "--model-dir",
+        model_dir.path().to_str().unwrap(),
+        "-l",
+        "en",
+        "--merge",
+        "--max-chunk",
+        "30",
+        "-f",
+        "srt,txt",
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("a required program is unavailable"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(std::fs::read_dir(model_dir.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn completion_scripts_cover_supported_shells_and_run_without_setup() {
     for shell in ["bash", "elvish", "fish", "nu", "powershell", "zsh"] {
         let output = command()

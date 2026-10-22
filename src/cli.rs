@@ -11,13 +11,14 @@ use usage_rs::ValueEnum;
 
 /// Tool requirements and reusable argument-file syntax.
 const HELP_FOOTER: &str = "\
-Wit requires ffmpeg and Wit tokens. YouTube captions require yt-dlp, without audio processing.
+Wit requires ffmpeg and Wit tokens. Cohere requires ffmpeg and downloads its model on first use.
+YouTube captions require yt-dlp, without audio processing.
 URLs require yt-dlp; YouTube may also need a JavaScript runtime such as Deno.
 
 Use @FILE to read options and inputs from a file of shell-style words; @@ escapes a literal @.
 Boolean transcription flags accept a --no- prefix, such as --no-merge, to override presets.";
 
-/// Transcribe with Wit.ai or retrieve existing YouTube captions.
+/// Transcribe with Wit.ai or Cohere Transcribe Arabic, or retrieve existing YouTube captions.
 ///
 /// Transcription is the default command. Use completions to set up your shell, or
 /// spec to export the CLI definition for documentation and other Usage tools.
@@ -83,11 +84,11 @@ pub struct Completions {
     pub dry_run: bool,
 }
 
-/// Transcribe with Wit.ai or retrieve existing YouTube captions.
+/// Transcribe with Wit.ai or Cohere Transcribe Arabic, or retrieve existing YouTube captions.
 ///
 /// Inputs can be media files, folders of media files, or URLs (videos, playlists,
 /// channels; anything yt-dlp supports). The youtube transcriber accepts only YouTube
-/// URLs and existing captions in --language; it never invokes Wit.
+/// URLs and existing captions in --language; it never recognizes audio.
 #[derive(Debug, Clone, usage_rs::Args)]
 #[usage(
     unknown_flags = "error",
@@ -97,6 +98,7 @@ pub struct Completions {
     exit_code(130, "Interrupted with Ctrl-C"),
     example("tafrigh transcribe lectures/ --transcriber wit -r -o transcripts -f srt,txt -w TOKEN", help = "Mirror a folder of recordings"),
     example("tafrigh transcribe lecture.mp3 --transcriber wit -f srt --words -w TOKEN", help = "Include word-level subtitles"),
+    example("tafrigh transcribe lecture.mp3 --transcriber cohere -f srt,txt", help = "Transcribe on this machine with Cohere Transcribe Arabic"),
     example("tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID --transcriber youtube --language ar", help = "Retrieve existing Arabic captions")
 )]
 pub struct Args {
@@ -111,6 +113,7 @@ pub struct Args {
     /// YouTube: required exact caption language (e.g. ar or en-US); no patterns or lists.
     /// Prefers manual captions, then original automatic captions; never translates.
     /// Wit: language of the apps; detected from the tokens when omitted.
+    /// Cohere: ar (the default; also handles Arabic-English code-switching) or en.
     #[usage(short = 'l', long, value_name = "LANG")]
     pub language: Option<String>,
 
@@ -135,6 +138,9 @@ pub struct Args {
     #[usage(flatten, next_help_heading = "Wit.ai")]
     pub wit: Wit,
 
+    #[usage(flatten, next_help_heading = "Local models")]
+    pub models: Models,
+
     #[usage(flatten, next_help_heading = "Downloads and tools")]
     pub tools: Tools,
 }
@@ -144,6 +150,9 @@ pub struct Args {
 pub enum Transcriber {
     /// Recognize audio with Wit.ai; requires Wit tokens and ffmpeg.
     Wit,
+    /// Recognize audio on this machine with Cohere Transcribe Arabic; requires ffmpeg and a
+    /// build with the cohere feature.
+    Cohere,
     /// Retrieve existing YouTube captions; missing captions fail the item.
     Youtube,
 }
@@ -245,13 +254,14 @@ pub struct Segmentation {
     #[usage(long, value_enum, default = "silero")]
     pub vad: Vad,
 
-    /// Longest chunk sent for recognition, in seconds (Wit allows up to 60 on dictation and
-    /// 20 on speech, padding included).
-    #[usage(long, value_name = "SECONDS", default = "15.0")]
-    pub max_chunk: f64,
+    /// Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohere].
+    /// Wit allows up to 60 on dictation and 20 on speech, Cohere under 400, padding included.
+    #[usage(long, value_name = "SECONDS")]
+    pub max_chunk: Option<f64>,
 
-    /// Merge consecutive speech up to --max-chunk: fewer requests and more context per
-    /// request; segments still follow Wit's utterances.
+    /// Merge consecutive speech up to --max-chunk: fewer requests and more context per request
+    /// [default: on for cohere, off for wit]. Wit segments still follow its utterances; Cohere
+    /// gives one segment per chunk.
     #[usage(long, negate = "no-merge")]
     pub merge: bool,
 
@@ -383,6 +393,25 @@ pub enum WitEndpoint {
     Speech,
 }
 
+/// Models that run on this machine.
+#[derive(Debug, Clone, usage_rs::Args)]
+pub struct Models {
+    /// Cohere variant to download on first use (bf16, f16, q8_0, q6_k, q5_k_m or q4_k_m), or a
+    /// local .gguf file.
+    #[usage(long, value_name = "MODEL", default = "q8_0", value_hint = usage_rs::ValueHint::FilePath)]
+    pub model: String,
+
+    /// Where the model runs: auto (this build's GPU when it works, otherwise the CPU), cpu,
+    /// gpu (fail without one), or gpu:N for the Nth GPU, counting from 0.
+    #[usage(long, value_name = "DEVICE", default = "auto")]
+    pub device: String,
+
+    /// Where downloaded models are kept [default: tafrigh/models in the user cache folder,
+    /// such as ~/.cache/tafrigh/models on Linux or ~/Library/Caches/tafrigh/models on macOS].
+    #[usage(long, value_name = "DIR", value_hint = usage_rs::ValueHint::DirPath)]
+    pub model_dir: Option<PathBuf>,
+}
+
 /// Downloads and external programs.
 #[derive(Debug, Clone, usage_rs::Args)]
 pub struct Tools {
@@ -402,7 +431,7 @@ pub struct Tools {
     #[usage(long, value_name = "PATH", default = "yt-dlp", value_hint = usage_rs::ValueHint::ExecutablePath, env = "TAFRIGH_YT_DLP")]
     pub yt_dlp: PathBuf,
 
-    /// ffmpeg executable (required with --transcriber wit).
+    /// ffmpeg executable (required with --transcriber wit or cohere).
     #[usage(long, value_name = "PATH", default = "ffmpeg", value_hint = usage_rs::ValueHint::ExecutablePath, env = "TAFRIGH_FFMPEG")]
     pub ffmpeg: PathBuf,
 
@@ -484,7 +513,7 @@ mod tests {
                 args.output.mode().unwrap(),
                 tafrigh::output::OutputMode::SideBySide
             );
-            assert_eq!(args.segmentation.max_chunk, 15.0);
+            assert_eq!(args.segmentation.max_chunk, None);
         }
     }
 
@@ -554,6 +583,10 @@ mod tests {
         assert_eq!(
             harness::candidates(Cli::spec(), "tafrigh --transcriber y"),
             ["youtube"]
+        );
+        assert_eq!(
+            harness::candidates(Cli::spec(), "tafrigh --transcriber c"),
+            ["cohere"]
         );
 
         assert!(

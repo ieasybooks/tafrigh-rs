@@ -17,7 +17,7 @@ const SAMPLE_NANOS: u64 = 1_000_000_000 / SAMPLE_RATE as u64;
 /// The longest audio the model accepts per call, padding included: one sample under 400 s.
 /// transcribe.cpp advertises 400 s, but its mel frontend adds a centered frame, so exactly
 /// 400 s needs one encoder frame more than the model's 5,000.
-const MAX_AUDIO_DURATION: Duration = Duration::from_nanos(400_000_000_000 - SAMPLE_NANOS);
+pub const MAX_AUDIO_DURATION: Duration = Duration::from_nanos(400_000_000_000 - SAMPLE_NANOS);
 /// The fewest samples the model accepts: its mel frontend needs two frames, one per 160-sample
 /// hop plus the centered one. A shorter chunk lasts under 10 ms, too short for any speech.
 const MIN_SAMPLES: usize = 160;

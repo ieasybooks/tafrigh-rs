@@ -2127,6 +2127,7 @@ dependencies = [
  "indicatif",
  "shell-words",
  "tafrigh",
+ "tafrigh-cohere",
  "tafrigh-wit",
  "tafrigh-youtube",
  "tempfile",

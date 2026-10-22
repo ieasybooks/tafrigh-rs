@@ -36,4 +36,4 @@ pub use error::CohereError;
 pub use model::{
     DownloadProgress, MODEL_REVISION, ModelMetadata, ModelSource, ModelVariant, default_model_dir,
 };
-pub use recognizer::CohereRecognizer;
+pub use recognizer::{CohereRecognizer, MAX_AUDIO_DURATION};

@@ -30,6 +30,55 @@ Outputs use `<video id>.<format>`, such as `VIDEO_ID.txt` and `VIDEO_ID.words.sr
 
 Pass cookies, JavaScript runtime settings and playlist selection through `--yt-dlp-args`. Caption retrieval enforces its download mode, selected track and temporary output paths after those arguments. The YouTube backend rejects explicit audio-processing and Wit options, `--recursive`, `--ffmpeg` and `--ffprobe`, including their negated forms where available.
 
+## Cohere Transcribe Arabic
+
+`--transcriber cohere` runs [Cohere Transcribe Arabic 07-2026](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026) on your machine through [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp). It recognizes Modern Standard Arabic, the major dialects and Arabic–English code-switching, or English with `-l en`. It needs ffmpeg, and the network only to download the model.
+
+```sh
+tafrigh lecture.mp3 --transcriber cohere -f srt,txt
+tafrigh lectures/ --transcriber cohere --model q4_k_m -r -o transcripts
+```
+
+### Models
+
+`--model` picks a variant, downloaded on first use from [handy-computer/cohere-transcribe-arabic-07-2026-gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf). tafrigh pins the repository revision and each file's SHA-256, and checks the hash after downloading.
+
+| Variant | Size | WER on FLEURS Arabic |
+|---|---|---|
+| `bf16` | 4.11 GB | 11.02% |
+| `f16` | 4.11 GB | 11.00% |
+| `q8_0` (default) | 2.41 GB | 11.06% |
+| `q6_k` | 1.97 GB | 11.07% |
+| `q5_k_m` | 1.77 GB | 10.95% |
+| `q4_k_m` | 1.56 GB | 11.18% |
+
+The error rates come from transcribe.cpp's [model page](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/cohere-transcribe-arabic-07-2026.md) (428 Egyptian Arabic clips). See [Speed and accuracy](#speed-and-accuracy) for tafrigh's own measurements.
+
+Models are kept in `tafrigh/models` in the user cache folder: `$XDG_CACHE_HOME` or `~/.cache` on Linux, and `~/Library/Caches` on macOS. Use `--model-dir` to keep them elsewhere, or pass a local `.gguf` file to `--model`.
+
+### GPUs
+
+`--device auto`, the default, uses the GPU this build supports when it works, and the CPU otherwise. `--device cpu` forces the CPU, `--device gpu` fails without a GPU, and `--device gpu:N` picks one of several GPUs, counting from 0. A log line at the start shows where the model runs.
+
+| Build | GPU |
+|---|---|
+| macOS arm64 archive | Metal |
+| Linux x86_64 `-cuda12` archive | NVIDIA, with the NVIDIA driver and the CUDA 12 runtime and cuBLAS (`libcudart.so.12`, `libcublas.so.12`, `libcublasLt.so.12`) |
+| Linux x86_64 `-cuda13` archive | NVIDIA Turing (GTX 16 and RTX 20 series) or newer, with driver 580 or newer and the CUDA 13 runtime and cuBLAS |
+| Other archives | none; Cohere runs on the CPU |
+| `cargo install tafrigh-cli --features cuda` | NVIDIA, built against your CUDA toolkit |
+
+The CUDA archives don't include NVIDIA's libraries. Without them, tafrigh doesn't start and reports `error while loading shared libraries: libcublas.so.12` (or `.13`). Newer drivers run both archives, but the CUDA runtime must match the archive's major version.
+
+### Chunks and limits
+
+- Cohere merges consecutive speech into chunks of up to 30 s by default (`--merge --max-chunk 30`). In tafrigh's measurements, that was more accurate and faster than Wit's 15 s chunks; see [Speed and accuracy](#speed-and-accuracy). Use `--no-merge --max-chunk 15` for shorter subtitle cues.
+- There are no word timings. Each chunk becomes one subtitle cue, so cues can be as long as the chunk. `--words` and the `words-*` formats are errors with Cohere, and `--resend-gaps` doesn't apply.
+- When the model starts repeating itself or reaches its token limit, tafrigh keeps the chunk's text up to that point, with the repeats dropped, and prints a warning.
+- Punctuation is always on.
+- A chunk, padding included, must be shorter than 400 s.
+- The model can invent text for silence and noise. Silero VAD removes them, so avoid `--vad none` on noisy recordings.
+
 ## Inputs and outputs
 
 Create an app on [wit.ai](https://wit.ai) in the language you want to transcribe, and copy its **Client Access Token** from the app's settings. Then:
@@ -126,7 +175,7 @@ usage generate manpage -f tafrigh.usage.kdl > tafrigh.1
 ## Tips
 
 - **More tokens, faster runs.** tafrigh starts one request per second per token by default; additional tokens can increase throughput. All tokens must belong to apps of the same language. Use `-l` / `--language` to set that language explicitly, or omit it to detect the language from the tokens.
-- **`--merge` for speed.** It sends fewer, longer requests. In the benchmark below, it roughly halved runtime with a small accuracy tradeoff.
+- **`--merge` for speed with Wit.** It sends fewer, longer requests. In the benchmark below, it roughly halved runtime with a small accuracy tradeoff.
 - **Interrupted?** Rerun the same command with `--skip-existing`; finished items are kept.
 - **A chunk that keeps failing** fails its file, so a rerun gives a complete transcript. `--on-chunk-error skip` leaves the chunk out instead.
 
@@ -153,6 +202,18 @@ With `--transcriber wit`:
 | tafrigh `--merge` | 7 min | 16.0% | 8.9% |
 
 Times depend on how busy Wit is. These runs sent WAV. With Opus, the default since then, 150 Arabic clips with human transcripts (from FLEURS, Common Voice, SADA, Casablanca and a Quran corpus) gave 26.9% word errors, against 27.7% with WAV, with word timings within 5 ms.
+
+### Cohere
+
+Measured on a GeForce GTX 1660 SUPER (6 GB) with a 6-core Intel Core i5-8500, against [cohere-transcribe](https://github.com/AliOsm/cohere-transcribe) 0.1.4, a Python package for the same model. The lecture is the 69-minute [Arabic grammar lecture](https://www.youtube.com/watch?v=Cdle09QLPLI) from cohere-transcribe's own benchmarks. Errors are measured on 500 Arabic clips (79 min), 100 each from FLEURS, Common Voice 18, SADA22, Casablanca and a Quran recitation corpus, with the text normalization from cohere-transcribe's benchmarks. Lecture times are medians of three fresh runs, including start-up and model loading; tafrigh's 500-clip times are single runs.
+
+| | Lecture | 500 clips | Word errors | Character errors | GPU memory |
+|---|---|---|---|---|---|
+| cohere-transcribe, FP16, batch 17 | 471 s | 537 s | 36.1% | 25.5% | 5,706 MiB |
+| tafrigh `q8_0` (default) | 251 s | 282 s | 24.4% | 12.6% | 2,948 MiB |
+| tafrigh `q4_k_m` | 253 s | 270 s | 24.6% | 12.7% | 2,136 MiB |
+
+tafrigh used its defaults, with speech merged into chunks of up to 30 s. With 15 s chunks and no merging, `q8_0` took 279 s on the lecture and made 27.4% word errors. The GTX 1660 has no BF16 support, so cohere-transcribe ran in FP16 with its largest batch that fits in 6 GB; its repetition guard left 81 of the 500 transcripts empty, which explains much of its error rate. On GPUs with BF16 and tensor cores, such as the RTX 3060 it was tuned on, cohere-transcribe is much faster than here.
 
 ## Using it as a library
 
@@ -222,7 +283,7 @@ YouTube validation, track selection, JSON3 parsing and word timings live in `taf
 
 ## Differences from the Python version
 
-- Wit.ai speech recognition and existing YouTube captions; Whisper isn't supported yet.
+- Wit.ai speech recognition, Cohere Transcribe Arabic on your machine, and existing YouTube captions; Whisper isn't supported yet.
 - Silero VAD instead of auditok, so long speech is split at pauses rather than at fixed lengths.
 - Subtitle cues follow what Wit hears, so they're shorter.
 - `--yt-dlp-args` takes yt-dlp command-line arguments instead of JSON.

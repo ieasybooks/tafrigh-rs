@@ -139,6 +139,15 @@ impl Default for ModelSource {
     }
 }
 
+impl fmt::Display for ModelSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Variant(variant) => variant.fmt(f),
+            Self::Local(path) => path.display().fmt(f),
+        }
+    }
+}
+
 impl From<ModelVariant> for ModelSource {
     fn from(variant: ModelVariant) -> Self {
         Self::Variant(variant)

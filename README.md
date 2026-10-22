@@ -1,20 +1,23 @@
 # tafrigh
 
-Transcribe audio and video with [Wit.ai](https://wit.ai), or retrieve existing YouTube captions. A Rust rewrite of [tafrigh](https://github.com/ieasybooks/tafrigh).
+Transcribe audio and video with [Wit.ai](https://wit.ai) or, on your own machine, with [Cohere Transcribe Arabic](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026). Or retrieve existing YouTube captions. A Rust rewrite of [tafrigh](https://github.com/ieasybooks/tafrigh).
 
 Works with files, folders, and URLs supported by yt-dlp. Writes txt, srt, vtt, csv, tsv, and json, with optional word-level timings.
 
 ## Install
 
-Download the archive for your platform from the [latest release](https://github.com/ieasybooks/tafrigh-rs/releases/latest), extract it, and put `tafrigh` on your `PATH`. Or install with Cargo (Rust 1.99 or newer):
+Download the archive for your platform from the [latest release](https://github.com/ieasybooks/tafrigh-rs/releases/latest), extract it, and put `tafrigh` on your `PATH`. Archives include Cohere. On Linux with an NVIDIA GPU, pick the `-cuda12` or `-cuda13` archive that matches your CUDA version ([requirements](docs/guide.md#gpus)).
+
+Or install with Cargo (Rust 1.99 or newer). The `cohere` feature adds Cohere and needs CMake and a C++ compiler; `cuda` also needs the CUDA toolkit:
 
 ```sh
 cargo install tafrigh-cli --locked
+cargo install tafrigh-cli --locked --features cohere
 ```
 
 Also install:
 
-- [ffmpeg](https://ffmpeg.org/download.html) with libopus (most builds have it) for Wit transcription.
+- [ffmpeg](https://ffmpeg.org/download.html) for Wit and Cohere transcription. Wit's default Opus uploads need an ffmpeg with libopus (most builds have it).
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Installation) for URLs.
 - [Deno](https://deno.com) or [Node.js 22+](https://nodejs.org) for YouTube ([Node setup](https://github.com/ieasybooks/tafrigh-rs/blob/main/docs/guide.md#javascript-runtime-for-youtube)).
 
@@ -22,7 +25,7 @@ From this checkout, `mise install ffmpeg yt-dlp` installs the latest stable ffmp
 
 ## Usage
 
-Choose `--transcriber wit` or `--transcriber youtube` explicitly for each run. Backends never switch automatically.
+Choose `--transcriber wit`, `cohere` or `youtube` explicitly for each run. Backends never switch automatically.
 
 For Wit, create an app on [wit.ai](https://wit.ai) in the language you want to transcribe, then copy its **Client Access Token** from the app's settings. You can supply multiple tokens from apps using the same language to increase throughput.
 
@@ -33,6 +36,15 @@ tafrigh lecture.mp3 --transcriber wit
 tafrigh lectures/ --transcriber wit -r -o transcripts -f srt,txt
 tafrigh "https://www.youtube.com/playlist?list=…" --transcriber wit --skip-existing
 ```
+
+Cohere Transcribe Arabic runs on your machine, on its GPU when there is one. The first run downloads the model: 2.4 GB for the default `q8_0`, or 1.6 GB for the smallest, `q4_k_m`.
+
+```sh
+tafrigh lecture.mp3 --transcriber cohere
+tafrigh lectures/ --transcriber cohere --model q4_k_m -r -o transcripts -f srt,txt
+```
+
+Cohere merges speech into chunks of up to 30 s and gives one subtitle cue per chunk, without word timings. See the [Cohere guide](docs/guide.md#cohere-transcribe-arabic) for variants, devices and speed.
 
 For existing YouTube captions, select one subtitle language. This requires yt-dlp, with no Wit tokens or ffmpeg:
 
@@ -58,9 +70,9 @@ tafrigh completions zsh --install
 
 ## Development
 
-Install the configured tools with mise, then run the checks from the repository root:
+Workspace builds include the Cohere recognizer, which compiles transcribe.cpp and needs CMake (pinned in mise) and a C++ compiler. Ordinary tests don't need the Cohere weights.
 
-Workspace builds include the local Cohere recognizer, which compiles transcribe.cpp and needs CMake (pinned in mise) and a C++ compiler. Cohere model weights are downloaded separately and are not needed for ordinary tests. See [third-party notices](crates/tafrigh-cohere/THIRD-PARTY-LICENSES.md) for the native dependencies.
+Install the configured tools with mise, then run the checks from the repository root:
 
 ```sh
 mise install
@@ -73,4 +85,4 @@ See [AGENTS.md](https://github.com/ieasybooks/tafrigh-rs/blob/main/AGENTS.md) fo
 
 ## License
 
-MIT. The bundled Silero model is also MIT.
+MIT. The bundled Silero model is also MIT. Cohere builds include transcribe.cpp and ggml, both MIT ([third-party notices](crates/tafrigh-cohere/THIRD-PARTY-LICENSES.md)). The Cohere weights are Apache-2.0 and are downloaded, not bundled.

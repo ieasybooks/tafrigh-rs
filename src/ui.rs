@@ -24,6 +24,42 @@ struct State {
     items: HashMap<Arc<str>, ItemBar>,
 }
 
+/// A download's progress bar, created on its first update so cached files show nothing.
+#[cfg(feature = "cohere")]
+pub struct DownloadBar {
+    multi: MultiProgress,
+    what: String,
+    bar: std::sync::OnceLock<ProgressBar>,
+}
+
+#[cfg(feature = "cohere")]
+impl DownloadBar {
+    /// Shows `downloaded` of `total` bytes.
+    pub fn update(&self, downloaded: u64, total: u64) {
+        let bar = self.bar.get_or_init(|| {
+            let bar = self.multi.add(ProgressBar::new(total));
+            bar.set_style(
+                ProgressStyle::with_template(
+                    "Downloading {msg} {bar:24.cyan/blue} {bytes}/{total_bytes} ({eta})",
+                )
+                .expect("template")
+                .progress_chars("━╸ "),
+            );
+            bar.set_message(self.what.clone());
+            bar
+        });
+        bar.set_length(total);
+        bar.set_position(downloaded);
+    }
+
+    /// Removes the bar.
+    pub fn finish(&self) {
+        if let Some(bar) = self.bar.get() {
+            bar.finish_and_clear();
+        }
+    }
+}
+
 /// One item's progress bar and what it has seen so far.
 struct ItemBar {
     bar: ProgressBar,
@@ -70,6 +106,16 @@ impl Ui {
             item.bar.finish_and_clear();
         }
         let _ = self.multi.clear();
+    }
+
+    /// A progress bar for downloading `what`, shown once the first bytes arrive.
+    #[cfg(feature = "cohere")]
+    pub fn download(&self, what: impl Into<String>) -> DownloadBar {
+        DownloadBar {
+            multi: self.multi.clone(),
+            what: what.into(),
+            bar: std::sync::OnceLock::new(),
+        }
     }
 
     /// Updates the display for a pipeline event.

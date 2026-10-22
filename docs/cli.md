@@ -3,7 +3,7 @@
 - **License:** MIT
 - **Repository:** https://github.com/ieasybooks/tafrigh-rs
 
-Transcribe with Wit.ai or retrieve existing YouTube captions.
+Transcribe with Wit.ai or Cohere Transcribe Arabic, or retrieve existing YouTube captions.
 
 Transcription is the default command. Use completions to set up your shell, or spec to export the CLI definition for documentation and other Usage tools.
 
@@ -40,9 +40,9 @@ tafrigh completions zsh --install
 
 - **Usage:** `tafrigh transcribe <FLAGS> <INPUT>…`
 
-Transcribe with Wit.ai or retrieve existing YouTube captions.
+Transcribe with Wit.ai or Cohere Transcribe Arabic, or retrieve existing YouTube captions.
 
-Inputs can be media files, folders of media files, or URLs (videos, playlists, channels; anything yt-dlp supports). The youtube transcriber accepts only YouTube URLs and existing captions in --language; it never invokes Wit.
+Inputs can be media files, folders of media files, or URLs (videos, playlists, channels; anything yt-dlp supports). The youtube transcriber accepts only YouTube URLs and existing captions in --language; it never recognizes audio.
 
 ### Arguments
 - **`<INPUT>…`** — Files, folders or URLs to transcribe.
@@ -50,8 +50,8 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
 ### Flags
 - **`--transcriber <BACKEND>`** — Backend to use for the entire run. Required; no automatic switching.
 
-  **Choices:** `wit`, `youtube`
-- **`-l --language <LANG>`** — YouTube: required exact caption language (e.g. ar or en-US); no patterns or lists. Prefers manual captions, then original automatic captions; never translates. Wit: language of the apps; detected from the tokens when omitted.
+  **Choices:** `wit`, `cohere`, `youtube`
+- **`-l --language <LANG>`** — YouTube: required exact caption language (e.g. ar or en-US); no patterns or lists. Prefers manual captions, then original automatic captions; never translates. Wit: language of the apps; detected from the tokens when omitted. Cohere: ar (the default; also handles Arabic-English code-switching) or en.
 - **`-r --recursive`** — Include media in subdirectories. Directory symlinks are not followed.
 - **`-q --quiet`** — Hide progress bars.
 - **`-v --verbose`** — More logging (-v debug, -vv trace). RUST_LOG overrides.
@@ -83,10 +83,8 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
   **Choices:** `silero`, `none`
 
   **Default:** `silero`
-- **`--max-chunk <SECONDS>`** — Longest chunk sent for recognition, in seconds (Wit allows up to 60 on dictation and 20 on speech, padding included).
-
-  **Default:** `15.0`
-- **`--merge`** — Merge consecutive speech up to --max-chunk: fewer requests and more context per request; segments still follow Wit's utterances.
+- **`--max-chunk <SECONDS>`** — Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohere]. Wit allows up to 60 on dictation and 20 on speech, Cohere under 400, padding included.
+- **`--merge`** — Merge consecutive speech up to --max-chunk: fewer requests and more context per request [default: on for cohere, off for wit]. Wit segments still follow its utterances; Cohere gives one segment per chunk.
 - **`--vad-threshold <P>`** — Speech probability threshold.
 
   **Default:** `0.5`
@@ -141,6 +139,15 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
 
   **Default:** `20240304`
 
+### Local models
+- **`--model <MODEL>`** — Cohere variant to download on first use (bf16, f16, q8_0, q6_k, q5_k_m or q4_k_m), or a local .gguf file.
+
+  **Default:** `q8_0`
+- **`--device <DEVICE>`** — Where the model runs: auto (this build's GPU when it works, otherwise the CPU), cpu, gpu (fail without one), or gpu:N for the Nth GPU, counting from 0.
+
+  **Default:** `auto`
+- **`--model-dir <DIR>`** — Where downloaded models are kept [default: tafrigh/models in the user cache folder, such as ~/.cache/tafrigh/models on Linux or ~/Library/Caches/tafrigh/models on macOS].
+
 ### Downloads and tools
 - **`--yt-dlp-args <ARGS>`** — Extra yt-dlp arguments, e.g. "--cookies cookies.txt --playlist-items 1-10".
 - **`--download-dir <DIR>`** — Where downloaded audio goes [default: -o, or the current directory].
@@ -150,7 +157,7 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
   **Default:** `yt-dlp`
 
   **Environment Variable:** `TAFRIGH_YT_DLP`
-- **`--ffmpeg <PATH>`** — ffmpeg executable (required with --transcriber wit).
+- **`--ffmpeg <PATH>`** — ffmpeg executable (required with --transcriber wit or cohere).
 
   **Default:** `ffmpeg`
 
@@ -185,13 +192,20 @@ Include word-level subtitles
 tafrigh transcribe lecture.mp3 --transcriber wit -f srt --words -w TOKEN
 ```
 
+Transcribe on this machine with Cohere Transcribe Arabic
+
+```
+tafrigh transcribe lecture.mp3 --transcriber cohere -f srt,txt
+```
+
 Retrieve existing Arabic captions
 
 ```
 tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID --transcriber youtube --language ar
 ```
 
-Wit requires ffmpeg and Wit tokens. YouTube captions require yt-dlp, without audio processing.
+Wit requires ffmpeg and Wit tokens. Cohere requires ffmpeg and downloads its model on first use.
+YouTube captions require yt-dlp, without audio processing.
 URLs require yt-dlp; YouTube may also need a JavaScript runtime such as Deno.
 
 Use @FILE to read options and inputs from a file of shell-style words; @@ escapes a literal @.
