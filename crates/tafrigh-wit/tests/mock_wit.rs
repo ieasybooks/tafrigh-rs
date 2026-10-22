@@ -10,7 +10,7 @@ use tafrigh::{
     ChunkOptions, ChunkRecognizer, ChunkedTranscriber, Error, OnChunkError, Recognition,
     TranscribeEvent, Transcriber,
 };
-use tafrigh_wit::{Endpoint, WitConfig, WitRecognizer};
+use tafrigh_wit::{AudioFormat, Endpoint, WitConfig, WitError, WitRecognizer};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -21,6 +21,8 @@ fn config(server: &MockServer, tokens: &[&str]) -> WitConfig {
     config.requests_per_second = 1000.0;
     config.retry_base_delay = Duration::from_millis(5);
     config.retry_max_delay = Duration::from_millis(20);
+    // Most tests look into the uploaded WAV.
+    config.audio_format = AudioFormat::Wav;
     config
 }
 
@@ -122,6 +124,42 @@ async fn sends_wav_like_js_tafrigh_and_parses_utterances() {
     let body = &server.received_requests().await.unwrap()[0].body;
     assert_eq!(body.len(), 44 + 1600 * 2);
     assert_eq!(&body[..4], b"RIFF");
+}
+
+#[tokio::test]
+async fn sends_ogg_opus_by_default() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/dictation"))
+        .and(header("content-type", "audio/opus"))
+        .respond_with(dictation("opus"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut config = config(&server, &["t"]);
+    config.audio_format = AudioFormat::default();
+    let recognizer = WitRecognizer::new(config).await.unwrap();
+    let recognition = recognizer.recognize(&chunk(16_000)).await.unwrap();
+    assert_eq!(joined_text(&recognition), "opus");
+
+    let body = &server.received_requests().await.unwrap()[0].body;
+    assert_eq!(&body[..4], b"OggS");
+    assert!(body.windows(8).any(|window| window == b"OpusHead"));
+    assert!(body.len() < 16_000 * 2 / 4, "{} bytes", body.len());
+}
+
+#[tokio::test]
+async fn opus_needs_an_ffmpeg_that_can_encode_it() {
+    let server = MockServer::start().await;
+    let mut config = config(&server, &["t"]);
+    config.ffmpeg = "/nonexistent/ffmpeg".into();
+    // WAV does not use ffmpeg.
+    assert!(WitRecognizer::new(config.clone()).await.is_ok());
+    config.audio_format = AudioFormat::Opus;
+    let err = WitRecognizer::new(config).await.unwrap_err();
+    assert!(matches!(err, WitError::Encode(_)), "{err:?}");
+    // Checked before any request.
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]

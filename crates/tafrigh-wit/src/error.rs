@@ -44,6 +44,10 @@ pub enum WitError {
         message: String,
     },
 
+    /// Audio could not be encoded for upload.
+    #[error("could not encode audio as Opus with {0}")]
+    Encode(String),
+
     /// The response could not be parsed.
     #[error("unexpected Wit response: {0}")]
     InvalidResponse(String),
@@ -75,7 +79,7 @@ impl WitError {
                 let code = code.to_ascii_lowercase();
                 code.contains("rate") || code.contains("timeout") || code.contains("unavailable")
             }
-            Self::Config(_) | Self::Client(_) | Self::Language(_) => false,
+            Self::Config(_) | Self::Client(_) | Self::Encode(_) | Self::Language(_) => false,
         }
     }
 

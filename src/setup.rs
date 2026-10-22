@@ -19,7 +19,7 @@ use tafrigh::output::{BuiltinFormat, OutputMode, OutputWriter};
 use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
 use tafrigh::segment::{FixedWindows, Segmenter};
 use tafrigh::source::{Input, YtDlp};
-use tafrigh_wit::{Endpoint, WitConfig};
+use tafrigh_wit::{AudioFormat, Endpoint, WitConfig};
 use tafrigh_youtube::YoutubeCaptions;
 use usage_rs::ValidationError;
 
@@ -179,7 +179,8 @@ impl TryFrom<&Args> for WitRun {
         };
 
         let request = max_chunk.saturating_add(pad.saturating_mul(2));
-        let wit = args.wit.config(request)?;
+        let mut wit = args.wit.config(request)?;
+        wit.ffmpeg.clone_from(&args.tools.ffmpeg);
         if request > wit.audio_limit() {
             return Err(ValidationError::field("--max-chunk")
                 .value(segmentation.max_chunk.to_string())
@@ -334,6 +335,7 @@ impl cli::Wit {
         let mut config = WitConfig::new(self.tokens.iter().cloned());
         config.language.clone_from(&self.language);
         config.endpoint = self.endpoint.into();
+        config.audio_format = self.audio.into();
         config.api_url.clone_from(&self.api_url);
         config.api_version.clone_from(&self.api_version);
         config.requests_per_second = rate;
@@ -355,6 +357,15 @@ fn default_concurrency(rate: f64, request: Duration) -> usize {
     (rate * (request.as_secs_f64() + 2.0))
         .ceil()
         .clamp(1.0, 64.0) as usize
+}
+
+impl From<cli::WitAudio> for AudioFormat {
+    fn from(audio: cli::WitAudio) -> Self {
+        match audio {
+            cli::WitAudio::Opus => Self::Opus,
+            cli::WitAudio::Wav => Self::Wav,
+        }
+    }
 }
 
 impl From<cli::WitEndpoint> for Endpoint {
@@ -448,9 +459,10 @@ mod tests {
 
     use tafrigh::output::Format;
 
-    use crate::cli::{Cli, Command};
+    use crate::cli::{Args, Cli, Command};
 
-    fn formats(flags: &[&str]) -> anyhow::Result<Vec<String>> {
+    /// Wit transcription arguments with `flags`.
+    fn parse(flags: &[&str]) -> anyhow::Result<Args> {
         let mut argv = vec!["tafrigh", "--transcriber", "wit", "-w", "t"];
         argv.extend_from_slice(flags);
         argv.push("x.mp3");
@@ -461,13 +473,27 @@ mod tests {
         else {
             panic!("expected transcription");
         };
-        Ok(parsed
+        Ok(*parsed)
+    }
+
+    fn formats(flags: &[&str]) -> anyhow::Result<Vec<String>> {
+        Ok(parse(flags)?
             .output
             .formats()
             .map_err(|error| anyhow::anyhow!("{error:?}"))?
             .iter()
             .map(|f| f.extension().to_owned())
             .collect())
+    }
+
+    #[test]
+    fn sends_opus_encoded_by_the_configured_ffmpeg_unless_asked_for_wav() {
+        let wit = |flags: &[&str]| super::WitRun::try_from(&parse(flags).unwrap()).unwrap().wit;
+        let opus = wit(&["--ffmpeg", "/opt/ffmpeg/bin/ffmpeg"]);
+        assert_eq!(opus.audio_format, super::AudioFormat::Opus);
+        assert_eq!(opus.ffmpeg, std::path::Path::new("/opt/ffmpeg/bin/ffmpeg"));
+        let wav = wit(&["--wit-audio", "wav"]);
+        assert_eq!(wav.audio_format, super::AudioFormat::Wav);
     }
 
     #[test]

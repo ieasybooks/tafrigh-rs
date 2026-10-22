@@ -14,7 +14,7 @@ cargo install tafrigh-cli --locked
 
 Also install:
 
-- [ffmpeg](https://ffmpeg.org/download.html) for Wit transcription.
+- [ffmpeg](https://ffmpeg.org/download.html) with libopus (most builds have it) for Wit transcription.
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Installation) for URLs.
 - [Deno](https://deno.com) or [Node.js 22+](https://nodejs.org) for YouTube ([Node setup](https://github.com/ieasybooks/tafrigh-rs/blob/main/docs/guide.md#javascript-runtime-for-youtube)).
 

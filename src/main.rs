@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::Context;
 use tafrigh::source::Input;
 use tafrigh::{ChunkedTranscriber, Event, Tafrigh};
-use tafrigh_wit::WitRecognizer;
+use tafrigh_wit::{WitError, WitRecognizer};
 use tracing_subscriber::EnvFilter;
 
 use crate::setup::{Backend, Plan, Run};
@@ -82,6 +82,12 @@ async fn start(run: Run, ui: &Ui) -> anyhow::Result<ExitCode> {
             let tokens = wit.wit.tokens.len();
             let recognizer = WitRecognizer::new(wit.wit)
                 .await
+                .map_err(|err| match err {
+                    WitError::Encode(_) => {
+                        anyhow::anyhow!("{err} (pass --wit-audio wav to send WAV instead)")
+                    }
+                    err => err.into(),
+                })
                 .context("setting up Wit.ai")?;
             tracing::info!(
                 "Wit.ai: {tokens} token(s), language {}",
