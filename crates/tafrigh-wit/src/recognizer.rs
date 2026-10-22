@@ -1,13 +1,15 @@
 use std::fmt;
-use std::time::Duration;
+use std::num::NonZero;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use reqwest::header::{ACCEPT, CONTENT_TYPE, RETRY_AFTER};
 use tafrigh::audio::AudioChunk;
 use tafrigh::{BoxError, ChunkRecognizer, ErrorChain, Recognition, Utterance};
+use tokio::sync::Semaphore;
 
 use crate::scheduler::Scheduler;
-use crate::{WitConfig, WitError, language, response};
+use crate::{AudioFormat, WitConfig, WitError, audio, language, response};
 
 /// Rate-limit refusals tolerated per chunk before they count as failed attempts.
 const MAX_RATE_LIMIT_RETRIES: u32 = 30;
@@ -18,6 +20,8 @@ pub struct WitRecognizer {
     config: WitConfig,
     language: String,
     scheduler: Scheduler,
+    /// Opus encodings running at once, at most one per CPU core.
+    encoders: Semaphore,
 }
 
 impl fmt::Debug for WitRecognizer {
@@ -30,9 +34,13 @@ impl fmt::Debug for WitRecognizer {
 }
 
 impl WitRecognizer {
-    /// Validates the configuration and looks up the apps' language when not given.
+    /// Validates the configuration, checks that ffmpeg can encode Opus when Opus is sent, and
+    /// looks up the apps' language when not given.
     pub async fn new(config: WitConfig) -> Result<Self, WitError> {
         config.validate()?;
+        if config.audio_format == AudioFormat::Opus {
+            audio::check_opus(&config.ffmpeg).await?;
+        }
         let client = reqwest::Client::builder()
             .timeout(config.request_timeout)
             // Wit intermittently rejects concurrent HTTP/2 uploads as `no-body`.
@@ -49,11 +57,13 @@ impl WitRecognizer {
             config.max_in_flight_per_token,
             config.request_interval()?,
         );
+        let cores = std::thread::available_parallelism().map_or(1, NonZero::get);
         Ok(Self {
             client,
             config,
             language,
             scheduler,
+            encoders: Semaphore::new(cores),
         })
     }
 
@@ -84,7 +94,7 @@ impl WitRecognizer {
             .post(url)
             .bearer_auth(&self.config.tokens[token])
             .timeout(timeout)
-            .header(CONTENT_TYPE, "audio/wav")
+            .header(CONTENT_TYPE, self.config.audio_format.content_type())
             // Same request shape as tafrigh's JS client: versioned query plus this header.
             .header(ACCEPT, "application/vnd.wit.20200513+json")
             .body(body)
@@ -109,6 +119,21 @@ impl WitRecognizer {
         response::parse(&bytes)
     }
 
+    /// The chunk's audio in the configured format.
+    async fn body(&self, chunk: &AudioChunk) -> Result<Vec<u8>, WitError> {
+        match self.config.audio_format {
+            AudioFormat::Wav => Ok(chunk.wav_bytes()),
+            AudioFormat::Opus => {
+                let _encoder = self
+                    .encoders
+                    .acquire()
+                    .await
+                    .expect("semaphore is never closed");
+                audio::opus(&self.config.ffmpeg, &chunk.samples).await
+            }
+        }
+    }
+
     fn backoff(&self, attempt: u32) -> Duration {
         let exponential = self
             .config
@@ -130,14 +155,30 @@ impl WitRecognizer {
 #[async_trait]
 impl ChunkRecognizer for WitRecognizer {
     async fn recognize(&self, chunk: &AudioChunk) -> Result<Recognition, BoxError> {
-        let body = chunk.wav_bytes();
+        let body = self.body(chunk).await?;
         let timeout = self.config.timeout_for(chunk.audio_duration());
         let mut attempt = 0;
         let mut rate_limited = 0;
+        let mut requests = 0;
         loop {
             let slot = self.scheduler.acquire().await;
-            let err = match self.request(slot.token(), body.clone(), timeout).await {
+            requests += 1;
+            let load = self.scheduler.load();
+            let sent = Instant::now();
+            let result = self.request(slot.token(), body.clone(), timeout).await;
+            tracing::debug!(
+                "chunk #{} request {requests}: {:.2}s of audio in {} bytes on token {} ({load}): \
+                 {} after {:.2?}",
+                chunk.index,
+                chunk.audio_duration().as_secs_f64(),
+                body.len(),
+                slot.token() + 1,
+                outcome(&result),
+                sent.elapsed()
+            );
+            let err = match result {
                 Ok(utterances) => {
+                    slot.succeeded();
                     return Ok(Recognition {
                         utterances: utterances.into_iter().map(|u| self.normalize(u)).collect(),
                     });
@@ -163,6 +204,16 @@ impl ChunkRecognizer for WitRecognizer {
                 );
                 continue;
             }
+            if err.is_overload()
+                && let Some(limit) = slot.overloaded()
+            {
+                tracing::debug!(
+                    "chunk #{}: Wit or the network seems overloaded ({}); sending at most \
+                     {limit} request(s) at once",
+                    chunk.index,
+                    ErrorChain(&err)
+                );
+            }
             attempt += 1;
             if !err.is_retryable() || attempt >= self.config.max_attempts {
                 return Err(Box::new(err));
@@ -187,5 +238,15 @@ impl ChunkRecognizer for WitRecognizer {
 
     fn max_in_flight(&self) -> usize {
         self.config.tokens.len() * self.config.max_in_flight_per_token
+    }
+}
+
+/// A short description of a request's outcome, for logs.
+fn outcome(result: &Result<Vec<Utterance>, WitError>) -> String {
+    match result {
+        Ok(utterances) => format!("{} utterance(s)", utterances.len()),
+        Err(WitError::Status { status, .. }) => format!("HTTP {status}"),
+        Err(WitError::Request(err)) if err.is_timeout() => "timed out".into(),
+        Err(_) => "failed".into(),
     }
 }

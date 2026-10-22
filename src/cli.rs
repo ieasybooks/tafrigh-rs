@@ -336,8 +336,9 @@ pub struct Wit {
     #[usage(long = "wit-rps", value_name = "N", default = "1.0")]
     pub requests_per_second: f64,
 
-    /// Concurrent requests per token [default: enough to keep up with --wit-rps; Wit answers
-    /// at about the pace of the audio, so longer chunks need more].
+    /// Most concurrent requests per token; fewer run while Wit or the network seems overloaded
+    /// [default: enough to keep up with --wit-rps; Wit answers at about the pace of the audio, so
+    /// longer chunks need more].
     #[usage(long = "wit-concurrency", value_name = "N")]
     pub concurrency: Option<usize>,
 
@@ -353,6 +354,11 @@ pub struct Wit {
     #[usage(long = "wit-endpoint", value_enum, default = "dictation")]
     pub endpoint: WitEndpoint,
 
+    /// Audio sent to Wit: opus (24 kbps, about a twelfth of WAV's size; needs an ffmpeg with
+    /// libopus) or wav.
+    #[usage(long = "wit-audio", value_enum, default = "opus")]
+    pub audio: WitAudio,
+
     /// Wit API base URL (e.g. a proxy or a local mock server).
     #[usage(
         long = "wit-api-url",
@@ -365,6 +371,15 @@ pub struct Wit {
     /// Wit API version, sent as the v query parameter.
     #[usage(long = "wit-api-version", value_name = "VERSION", default = "20240304")]
     pub api_version: String,
+}
+
+/// Value of `--wit-audio`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum WitAudio {
+    /// Ogg Opus at 24 kbps, encoded with ffmpeg.
+    Opus,
+    /// 16-bit PCM WAV.
+    Wav,
 }
 
 /// Value of `--wit-endpoint`.

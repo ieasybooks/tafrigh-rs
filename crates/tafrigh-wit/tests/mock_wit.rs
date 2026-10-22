@@ -10,7 +10,7 @@ use tafrigh::{
     ChunkOptions, ChunkRecognizer, ChunkedTranscriber, Error, OnChunkError, Recognition,
     TranscribeEvent, Transcriber,
 };
-use tafrigh_wit::{Endpoint, WitConfig, WitRecognizer};
+use tafrigh_wit::{AudioFormat, Endpoint, WitConfig, WitError, WitRecognizer};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -21,6 +21,8 @@ fn config(server: &MockServer, tokens: &[&str]) -> WitConfig {
     config.requests_per_second = 1000.0;
     config.retry_base_delay = Duration::from_millis(5);
     config.retry_max_delay = Duration::from_millis(20);
+    // Most tests look into the uploaded WAV.
+    config.audio_format = AudioFormat::Wav;
     config
 }
 
@@ -125,6 +127,42 @@ async fn sends_wav_like_js_tafrigh_and_parses_utterances() {
 }
 
 #[tokio::test]
+async fn sends_ogg_opus_by_default() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/dictation"))
+        .and(header("content-type", "audio/opus"))
+        .respond_with(dictation("opus"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut config = config(&server, &["t"]);
+    config.audio_format = AudioFormat::default();
+    let recognizer = WitRecognizer::new(config).await.unwrap();
+    let recognition = recognizer.recognize(&chunk(16_000)).await.unwrap();
+    assert_eq!(joined_text(&recognition), "opus");
+
+    let body = &server.received_requests().await.unwrap()[0].body;
+    assert_eq!(&body[..4], b"OggS");
+    assert!(body.windows(8).any(|window| window == b"OpusHead"));
+    assert!(body.len() < 16_000 * 2 / 4, "{} bytes", body.len());
+}
+
+#[tokio::test]
+async fn opus_needs_an_ffmpeg_that_can_encode_it() {
+    let server = MockServer::start().await;
+    let mut config = config(&server, &["t"]);
+    config.ffmpeg = "/nonexistent/ffmpeg".into();
+    // WAV does not use ffmpeg.
+    assert!(WitRecognizer::new(config.clone()).await.is_ok());
+    config.audio_format = AudioFormat::Opus;
+    let err = WitRecognizer::new(config).await.unwrap_err();
+    assert!(matches!(err, WitError::Encode(_)), "{err:?}");
+    // Checked before any request.
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn retries_rate_limits_and_server_errors() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -149,6 +187,111 @@ async fn retries_rate_limits_and_server_errors() {
     let recognition = recognizer.recognize(&chunk(160)).await.unwrap();
     assert_eq!(joined_text(&recognition), "finally");
     assert_eq!(server.received_requests().await.unwrap().len(), 3);
+}
+
+/// Refuses the first request with `Retry-After: 1` and records when each request arrives.
+struct RetryAfterOnce {
+    arrivals: Arc<Mutex<Vec<std::time::Instant>>>,
+}
+
+impl Respond for RetryAfterOnce {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        let mut arrivals = self.arrivals.lock().unwrap();
+        arrivals.push(std::time::Instant::now());
+        if arrivals.len() == 1 {
+            ResponseTemplate::new(429).insert_header("retry-after", "1")
+        } else {
+            dictation("ok")
+        }
+    }
+}
+
+#[tokio::test]
+async fn retry_after_holds_requests_already_waiting() {
+    let server = MockServer::start().await;
+    let arrivals = Arc::new(Mutex::new(Vec::new()));
+    Mock::given(method("POST"))
+        .respond_with(RetryAfterOnce {
+            arrivals: arrivals.clone(),
+        })
+        .mount(&server)
+        .await;
+    let mut config = config(&server, &["t"]);
+    config.requests_per_second = 4.0;
+    config.max_in_flight_per_token = 4;
+    let recognizer = WitRecognizer::new(config).await.unwrap();
+    let chunk = chunk(160);
+    // Four requests book starts 250ms apart; the first is told to wait a second.
+    let results = futures::future::join_all((0..4).map(|_| recognizer.recognize(&chunk))).await;
+    assert!(results.iter().all(Result::is_ok));
+    let arrivals = arrivals.lock().unwrap();
+    assert_eq!(arrivals.len(), 5);
+    for later in &arrivals[1..] {
+        let after = *later - arrivals[0];
+        assert!(
+            after >= Duration::from_millis(950),
+            "sent {after:?} after the 429"
+        );
+    }
+}
+
+/// Answers the first `failures` requests with HTTP 503 at once, and later ones with a
+/// dictation after `delay`; records when the later ones arrive.
+struct OverloadedFirst {
+    failures: usize,
+    delay: Duration,
+    seen: AtomicUsize,
+    arrivals: Arc<Mutex<Vec<std::time::Instant>>>,
+}
+
+impl Respond for OverloadedFirst {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        if self.seen.fetch_add(1, Ordering::SeqCst) < self.failures {
+            return ResponseTemplate::new(503);
+        }
+        self.arrivals
+            .lock()
+            .unwrap()
+            .push(std::time::Instant::now());
+        dictation("ok").set_delay(self.delay)
+    }
+}
+
+#[tokio::test]
+async fn overloads_send_fewer_requests_at_once() {
+    let server = MockServer::start().await;
+    let arrivals = Arc::new(Mutex::new(Vec::new()));
+    let delay = Duration::from_millis(200);
+    Mock::given(method("POST"))
+        .respond_with(OverloadedFirst {
+            failures: 8,
+            delay,
+            seen: AtomicUsize::new(0),
+            arrivals: arrivals.clone(),
+        })
+        .mount(&server)
+        .await;
+    let mut config = config(&server, &["t"]);
+    config.max_in_flight_per_token = 8;
+    let recognizer = WitRecognizer::new(config).await.unwrap();
+    let chunk = chunk(160);
+    // All eight first attempts fail; their retries may use at most half of the eight.
+    let results = futures::future::join_all((0..8).map(|_| recognizer.recognize(&chunk))).await;
+    assert!(results.iter().all(Result::is_ok));
+    let arrivals = arrivals.lock().unwrap();
+    assert_eq!(arrivals.len(), 8);
+    // A request is in flight for at least `delay` after it arrives.
+    let most_at_once = arrivals
+        .iter()
+        .map(|&start| {
+            arrivals
+                .iter()
+                .filter(|&&other| other >= start && other < start + delay)
+                .count()
+        })
+        .max()
+        .unwrap();
+    assert!(most_at_once <= 4, "{most_at_once} requests at once");
 }
 
 fn rate_limit(scope: &str) -> ResponseTemplate {

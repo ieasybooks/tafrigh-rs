@@ -310,6 +310,7 @@ async fn transcribes_with_env_credentials_nested_presets_and_explicit_overrides(
     let server = MockServer::start().await;
     Mock::given(method("POST")).and(path("/dictation"))
         .and(header("authorization", "Bearer test-token"))
+        .and(header("content-type", "audio/opus"))
         .respond_with(ResponseTemplate::new(200).set_body_string(
             r#"{"is_final":true,"type":"FINAL_TRANSCRIPTION","text":"hello world","speech":{"confidence":0.9,"tokens":[]}}"#
         )).expect(1).mount(&server).await;

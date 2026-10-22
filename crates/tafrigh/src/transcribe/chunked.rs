@@ -232,6 +232,7 @@ impl Transcriber for ChunkedTranscriber {
         let mut inflight = FuturesUnordered::new();
         let mut segments: Vec<(usize, Segment)> = Vec::new();
         let mut receiving = true;
+        let mut tally = Tally::default();
         let outcome: Result<()> = loop {
             tokio::select! {
                 biased;
@@ -242,6 +243,7 @@ impl Transcriber for ChunkedTranscriber {
                     match result {
                         Ok(recognition) => {
                             let recognized = meta.recognized(recognition);
+                            tally.recognized(resent, recognized.segments.is_empty());
                             if resent {
                                 tracing::debug!(
                                     "chunk #{} resend {:.2}s–{:.2}s: {} segment(s)",
@@ -260,6 +262,7 @@ impl Transcriber for ChunkedTranscriber {
                                     for again in
                                         self.resends(&request, &recognized.segments, min_gap)
                                     {
+                                        tally.queued(&again);
                                         inflight.push(recognize(self.recognizer.clone(), again));
                                     }
                                 }
@@ -283,6 +286,7 @@ impl Transcriber for ChunkedTranscriber {
                             start: meta.start,
                             end: meta.end,
                         });
+                        tally.queued(&request);
                         inflight.push(recognize(self.recognizer.clone(), *request));
                     }
                     Some(Produced::Decoded(seconds)) => {
@@ -298,6 +302,7 @@ impl Transcriber for ChunkedTranscriber {
         };
         drop(rx);
         drop(inflight);
+        tracing::debug!("{}: {tally}", media.display());
 
         let decoding = task_result(producer_task.await);
         outcome?;
@@ -307,6 +312,54 @@ impl Transcriber for ChunkedTranscriber {
         // Stable, so segments starting together keep their order.
         segments.sort_by(|(a, x), (b, y)| a.cmp(b).then(x.start.total_cmp(&y.start)));
         Ok(segments.into_iter().map(|(_, segment)| segment).collect())
+    }
+}
+
+/// Recognition requests queued for one file, for logs. Retries inside the recognizer are not
+/// counted here; the recognizer logs each upload.
+#[derive(Default)]
+struct Tally {
+    chunks: usize,
+    empty_chunks: usize,
+    resends: usize,
+    resends_with_words: usize,
+    answered: usize,
+    /// Seconds of audio queued for recognition, padding included.
+    audio: f64,
+}
+
+impl Tally {
+    fn queued(&mut self, request: &Request) {
+        match request.kind {
+            RequestKind::Chunk { .. } => self.chunks += 1,
+            RequestKind::Resend => self.resends += 1,
+        }
+        self.audio += request.chunk.audio_duration().as_secs_f64();
+    }
+
+    fn recognized(&mut self, resent: bool, empty: bool) {
+        self.answered += 1;
+        match (resent, empty) {
+            (false, true) => self.empty_chunks += 1,
+            (true, false) => self.resends_with_words += 1,
+            _ => {}
+        }
+    }
+}
+
+impl std::fmt::Display for Tally {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} chunk(s), {} without words; {} resend(s), {} with words; {} unanswered (failed \
+             or cancelled); {:.1}s of audio queued for recognition, padding included",
+            self.chunks,
+            self.empty_chunks,
+            self.resends,
+            self.resends_with_words,
+            self.chunks + self.resends - self.answered,
+            self.audio
+        )
     }
 }
 
@@ -964,6 +1017,28 @@ mod tests {
         assert_eq!(
             merged.missed_speech(&[], S + 1),
             [span(2 * S, 4 * S), span(6 * S, 8 * S)]
+        );
+    }
+
+    #[test]
+    fn tallies_requests_for_the_log() {
+        let half_second = Padding::silence(Duration::from_millis(500));
+        let chunk = request(0, 4 * S, S / 2, &[(0, 4 * S)]);
+        let resend = chunk.resend(span(S, 3 * S), Some(half_second));
+        let mut tally = Tally::default();
+        tally.queued(&chunk);
+        tally.queued(&resend);
+        tally.recognized(false, true);
+        assert_eq!(
+            tally.to_string(),
+            "1 chunk(s), 1 without words; 1 resend(s), 0 with words; 1 unanswered (failed or \
+             cancelled); 8.0s of audio queued for recognition, padding included"
+        );
+        tally.recognized(true, false);
+        assert!(
+            tally
+                .to_string()
+                .contains("1 resend(s), 1 with words; 0 unanswered")
         );
     }
 

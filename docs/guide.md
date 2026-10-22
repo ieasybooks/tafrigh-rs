@@ -137,9 +137,10 @@ Exit codes: `0` success, `1` error, `2` invalid arguments, `3` some items failed
 With `--transcriber wit`:
 
 1. ffmpeg decodes the audio, and [Silero VAD](https://github.com/snakers4/silero-vad) finds the speech in it. ffprobe, normally shipped with ffmpeg, adds progress percentages.
-2. The speech is cut into chunks of up to 15 s by default, padded with silence, and sent to Wit across all tokens.
+2. The speech is cut into chunks of up to 15 s by default, padded with silence, encoded as Opus at 24 kbps, and sent to Wit across all tokens. Opus requests are about a twelfth of the size of WAV, and need an ffmpeg built with libopus, as most builds are. `--wit-audio wav` sends WAV instead.
 3. When Wit returns no words for a stretch of speech, that stretch is sent again on its own (`--resend-gaps`).
-4. The next file starts while the current one waits for its last answers. Transcripts are still written in order.
+4. When requests time out or Wit returns HTTP 408 or a server error, fewer requests are sent at once, so an overloaded network or Wit gets time to recover. Successful requests raise the limit again, up to `--wit-concurrency` per token. Rate limits are handled separately, by waiting as Wit asks.
+5. The next file starts while the current one waits for its last answers. Transcripts are still written in order.
 
 ## Speed and accuracy
 
@@ -151,7 +152,7 @@ With `--transcriber wit`:
 | tafrigh | 15 min | 15.6% | 8.4% |
 | tafrigh `--merge` | 7 min | 16.0% | 8.9% |
 
-Times depend on how busy Wit is.
+Times depend on how busy Wit is. These runs sent WAV. With Opus, the default since then, 150 Arabic clips with human transcripts (from FLEURS, Common Voice, SADA, Casablanca and a Quran corpus) gave 26.9% word errors, against 27.7% with WAV, with word timings within 5 ms.
 
 ## Using it as a library
 

@@ -122,7 +122,7 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
 - **`--wit-rps <N>`** — Request starts per second for each token.
 
   **Default:** `1.0`
-- **`--wit-concurrency <N>`** — Concurrent requests per token [default: enough to keep up with --wit-rps; Wit answers at about the pace of the audio, so longer chunks need more].
+- **`--wit-concurrency <N>`** — Most concurrent requests per token; fewer run while Wit or the network seems overloaded [default: enough to keep up with --wit-rps; Wit answers at about the pace of the audio, so longer chunks need more].
 - **`--wit-attempts <N>`** — Attempts per chunk, including the first.
 
   **Default:** `5`
@@ -132,6 +132,11 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
   **Choices:** `dictation`, `speech`
 
   **Default:** `dictation`
+- **`--wit-audio <WIT_AUDIO>`** — Audio sent to Wit: opus (24 kbps, about a twelfth of WAV's size; needs an ffmpeg with libopus) or wav.
+
+  **Choices:** `opus`, `wav`
+
+  **Default:** `opus`
 - **`--wit-api-url <URL>`** — Wit API base URL (e.g. a proxy or a local mock server).
 
   **Default:** `https://api.wit.ai`

@@ -1,7 +1,8 @@
 use std::fmt;
+use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::WitError;
+use crate::{AudioFormat, WitError};
 
 /// Which Wit endpoint transcribes audio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -46,9 +47,11 @@ pub struct WitConfig {
     pub api_version: String,
     /// Request starts allowed per second for each token.
     pub requests_per_second: f64,
-    /// Concurrent requests per token. Wit answers at about the pace of the audio, so keeping
-    /// up with [`Self::requests_per_second`] takes about the rate times (seconds of audio per
-    /// request + 2). The default, 18, suits 1 request a second with chunks up to 16s.
+    /// Most concurrent requests per token. Wit answers at about the pace of the audio, so
+    /// keeping up with [`Self::requests_per_second`] takes about the rate times (seconds of
+    /// audio per request + 2). The default, 18, suits 1 request a second with chunks up to 16s.
+    /// Fewer requests run at once while Wit or the network seems overloaded: timeouts and server
+    /// errors halve the requests being sent, and successes raise the limit again.
     pub max_in_flight_per_token: usize,
     /// Attempts per chunk, including the first.
     pub max_attempts: u32,
@@ -63,6 +66,10 @@ pub struct WitConfig {
     pub request_timeout_base: Duration,
     /// Longest audio per request; `None` uses [`Endpoint::default_max_audio`].
     pub max_audio: Option<Duration>,
+    /// Format of the audio sent to Wit.
+    pub audio_format: AudioFormat,
+    /// The `ffmpeg` executable that encodes [`AudioFormat::Opus`].
+    pub ffmpeg: PathBuf,
 }
 
 impl WitConfig {
@@ -90,6 +97,8 @@ impl WitConfig {
             request_timeout: Duration::from_mins(1),
             request_timeout_base: Duration::from_secs(15),
             max_audio: None,
+            audio_format: AudioFormat::default(),
+            ffmpeg: "ffmpeg".into(),
         }
     }
 
@@ -149,6 +158,8 @@ impl fmt::Debug for WitConfig {
             .field("request_timeout", &self.request_timeout)
             .field("request_timeout_base", &self.request_timeout_base)
             .field("max_audio", &self.max_audio)
+            .field("audio_format", &self.audio_format)
+            .field("ffmpeg", &self.ffmpeg)
             .finish()
     }
 }

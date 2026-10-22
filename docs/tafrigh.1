@@ -163,7 +163,7 @@ Request starts per second for each token.
 .RE
 .TP
 \fB\-\-wit\-concurrency\fR \fI<N>\fR
-Concurrent requests per token [default: enough to keep up with \-\-wit\-rps; Wit answers at about the pace of the audio, so longer chunks need more].
+Most concurrent requests per token; fewer run while Wit or the network seems overloaded [default: enough to keep up with \-\-wit\-rps; Wit answers at about the pace of the audio, so longer chunks need more].
 .TP
 \fB\-\-wit\-attempts\fR \fI<N>\fR
 Attempts per chunk, including the first.
@@ -178,6 +178,12 @@ Longest audio per request in seconds [default: 60 for dictation, 20 for speech].
 Wit endpoint: dictation (transcription only) or speech (also extracts intents).
 .RS
 \fIDefault: \fRdictation
+.RE
+.TP
+\fB\-\-wit\-audio\fR \fI<WIT_AUDIO>\fR
+Audio sent to Wit: opus (24 kbps, about a twelfth of WAV's size; needs an ffmpeg with libopus) or wav.
+.RS
+\fIDefault: \fRopus
 .RE
 .TP
 \fB\-\-wit\-api\-url\fR \fI<URL>\fR
