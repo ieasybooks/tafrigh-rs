@@ -9,8 +9,8 @@ use tokio::sync::mpsc;
 
 use super::{ChunkRecognizer, Recognition, Transcriber};
 use crate::audio::{
-    AudioChunk, Decoder, Padding, SAMPLE_RATE, duration_to_samples, samples_to_seconds,
-    seconds_to_samples,
+    AudioChunk, Decoder, Padding, SAMPLE_RATE, duration_to_samples, samples_to_duration,
+    samples_to_seconds, seconds_to_samples,
 };
 use crate::error::task_result;
 use crate::event::{Progress, TranscribeEvent};
@@ -47,7 +47,7 @@ pub struct ChunkOptions {
     /// Resend speech the recognizer skipped: when a chunk's words leave at least this much
     /// detected speech uncovered, that stretch goes out again as its own request. Recognizers
     /// such as Wit sometimes stop transcribing partway through a chunk. Needs word timings;
-    /// `None` disables.
+    /// `None` disables. Rejected when [`ChunkRecognizer::word_timings`] is false.
     pub resend_gaps: Option<Duration>,
 }
 
@@ -61,6 +61,20 @@ impl Default for ChunkOptions {
             max_in_flight: None,
             resend_gaps: Some(Duration::from_secs(1)),
         }
+    }
+}
+
+impl ChunkOptions {
+    /// The longest audio sent per request: a chunk plus padding on both sides, counted in the
+    /// whole samples that chunking and padding round them to.
+    #[must_use]
+    pub fn longest_request(&self) -> Duration {
+        let pad = self
+            .padding
+            .map_or(0, |padding| duration_to_samples(padding.length));
+        samples_to_duration(
+            duration_to_samples(self.max_chunk).saturating_add(pad.saturating_mul(2)),
+        )
     }
 }
 
@@ -87,8 +101,9 @@ impl ChunkedTranscriber {
     /// Pairs a segmenter with a recognizer. Both may also be shared `Arc`s, including
     /// `Arc<dyn Segmenter>` and `Arc<dyn ChunkRecognizer>` chosen at runtime.
     ///
-    /// Fails when `options` are out of range or chunks (plus padding) would exceed the
-    /// recognizer's [`ChunkRecognizer::max_audio_duration`].
+    /// Fails when `options` are out of range, when [`ChunkOptions::longest_request`] exceeds
+    /// the recognizer's [`ChunkRecognizer::max_audio_duration`], or when gap resends are
+    /// enabled for a recognizer without word timings.
     pub fn new(
         segmenter: impl Segmenter + 'static,
         recognizer: impl ChunkRecognizer + 'static,
@@ -101,6 +116,12 @@ impl ChunkedTranscriber {
                 "maximum chunk duration must be at least one sample".into(),
             ));
         }
+        if options.resend_gaps.is_some() && !recognizer.word_timings() {
+            return Err(Error::Config(
+                "gap resends require a recognizer with word timings; set resend_gaps to None"
+                    .into(),
+            ));
+        }
         if let Some(gap) = options.resend_gaps
             && duration_to_samples(gap) == 0
         {
@@ -108,15 +129,12 @@ impl ChunkedTranscriber {
                 "the gap that triggers a resend must be at least one sample".into(),
             ));
         }
-        let padding = options
-            .padding
-            .map_or(Duration::ZERO, |p| p.length)
-            .saturating_mul(2);
+        let request = options.longest_request();
         if let Some(limit) = recognizer.max_audio_duration()
-            && options.max_chunk.saturating_add(padding) > limit
+            && request > limit
         {
             return Err(Error::Config(format!(
-                "chunks of {:.2?} plus {padding:.2?} padding exceed the recognizer's {limit:.2?} limit",
+                "chunks of {:?} plus padding, {request:?} in whole samples, exceed the recognizer's {limit:?} limit",
                 options.max_chunk,
             )));
         }
@@ -820,6 +838,51 @@ mod tests {
         }
     }
 
+    struct UntimedRecognizer;
+
+    #[async_trait::async_trait]
+    impl ChunkRecognizer for UntimedRecognizer {
+        async fn recognize(&self, _chunk: &AudioChunk) -> Result<Recognition, BoxError> {
+            Ok(Recognition::text("speech without word timings"))
+        }
+
+        fn word_timings(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn gap_resends_require_word_timings_even_through_arc() {
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(15)).unwrap();
+        let recognizer: Arc<dyn ChunkRecognizer> = Arc::new(UntimedRecognizer);
+        assert!(!recognizer.word_timings());
+        let error =
+            ChunkedTranscriber::new(segmenter, recognizer, ChunkOptions::default()).unwrap_err();
+        assert!(matches!(error, Error::Config(_)));
+        assert!(error.to_string().contains("gap resends require"));
+    }
+
+    #[test]
+    fn untimed_recognizer_is_accepted_with_gap_resends_disabled() {
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(15)).unwrap();
+        ChunkedTranscriber::new(
+            segmenter,
+            UntimedRecognizer,
+            ChunkOptions {
+                resend_gaps: None,
+                ..ChunkOptions::default()
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn recognizers_supply_word_timings_by_default() {
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(15)).unwrap();
+        assert!(NoopRecognizer.word_timings());
+        ChunkedTranscriber::new(segmenter, NoopRecognizer, ChunkOptions::default()).unwrap();
+    }
+
     /// Accepts up to its duration of audio per request.
     struct LimitedRecognizer(Duration);
 
@@ -1108,5 +1171,31 @@ mod tests {
             error.to_string().contains("exceed the recognizer's"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn checks_the_limit_against_the_samples_sent() {
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(399)).unwrap();
+        // 6,399,999 samples.
+        let limit = Duration::from_nanos(399_999_937_500);
+        let options = |padding| ChunkOptions {
+            max_chunk: Duration::from_secs(399),
+            padding: Some(Padding::silence(padding)),
+            ..ChunkOptions::default()
+        };
+        // 7,999.5 samples of padding: the durations add up to the limit, but the padding rounds
+        // up to 8,000 samples on each side.
+        let rounded_up = options(Duration::from_nanos(499_968_750));
+        assert_eq!(rounded_up.longest_request(), Duration::from_secs(400));
+        let error =
+            ChunkedTranscriber::new(segmenter, LimitedRecognizer(limit), rounded_up).unwrap_err();
+        assert!(
+            error.to_string().contains("400s in whole samples"),
+            "{error}"
+        );
+        // 7,999 samples on each side fit.
+        let fits = options(Duration::from_nanos(499_937_500));
+        assert_eq!(fits.longest_request(), Duration::from_micros(399_999_875));
+        ChunkedTranscriber::new(segmenter, LimitedRecognizer(limit), fits).unwrap();
     }
 }

@@ -7,6 +7,7 @@
 //! `--max-chunk` leaves room for Silero's speech padding.
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
@@ -19,9 +20,11 @@ use tafrigh::output::{BuiltinFormat, OutputMode, OutputWriter};
 use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
 use tafrigh::segment::{FixedWindows, Segmenter};
 use tafrigh::source::{Input, YtDlp};
+#[cfg(feature = "cohere")]
+use tafrigh_cohere::{CohereConfig, Device, Language, ModelSource, ModelVariant};
 use tafrigh_wit::{AudioFormat, Endpoint, WitConfig};
 use tafrigh_youtube::YoutubeCaptions;
-use usage_rs::ValidationError;
+use usage_rs::{Event, Parser, ValidationError};
 
 use crate::cli::{self, Args, Cli, Command, Completions, FormatChoice, Output, Tools, Transcriber};
 
@@ -52,15 +55,29 @@ pub struct Run {
 /// The backend a run uses, with its settings.
 pub enum Backend {
     Wit(Box<WitRun>),
+    #[cfg(feature = "cohere")]
+    Cohere(Box<CohereRun>),
     Youtube(YoutubeCaptions),
+}
+
+/// How audio backends decode, segment and chunk recordings.
+pub struct Audio {
+    pub decoder: Decoder,
+    pub segmenter: SegmenterConfig,
+    pub chunks: ChunkOptions,
 }
 
 /// Settings for transcribing with Wit.
 pub struct WitRun {
-    pub decoder: Decoder,
-    pub segmenter: SegmenterConfig,
-    pub chunks: ChunkOptions,
+    pub audio: Audio,
     pub wit: WitConfig,
+}
+
+/// Settings for transcribing with Cohere Transcribe Arabic.
+#[cfg(feature = "cohere")]
+pub struct CohereRun {
+    pub audio: Audio,
+    pub cohere: CohereConfig,
 }
 
 /// The segmenter `--vad` selects, configured. Built when the run starts, because loading
@@ -79,30 +96,126 @@ impl SegmenterConfig {
     }
 }
 
-impl TryFrom<Cli> for Plan {
-    type Error = ValidationError;
+impl Plan {
+    /// Parse options and reject explicit flags the selected backend does not use.
+    pub fn parse_from<'v>(argv: &[&'v OsStr]) -> Result<Self, usage_rs::Error<'static, 'v>> {
+        let cli = Cli::parse_from(argv)?;
+        let typed = typed_options(argv)?;
+        Self::new(cli, &typed).map_err(ValidationError::into_parse_error)
+    }
 
-    fn try_from(cli: Cli) -> Result<Self, ValidationError> {
+    fn new(cli: Cli, typed: &Typed) -> Result<Self, ValidationError> {
         Ok(match cli.command {
-            Command::Transcribe(args) => Self::Transcribe(Box::new(Run::try_from(*args)?)),
+            Command::Transcribe(args) => Self::Transcribe(Box::new(Run::new(&args, typed)?)),
             Command::Completions(args) => Self::Completions(args),
             Command::Spec => Self::Spec,
         })
     }
 }
 
-impl TryFrom<Args> for Run {
-    type Error = ValidationError;
+/// Long names of the options typed on the command line, such as `merge` for `--no-merge`.
+type Typed = HashSet<&'static str>;
 
-    fn try_from(args: Args) -> Result<Self, ValidationError> {
+/// Usage's binding events contain only argv flags, including negations and short forms.
+/// Environment fallbacks and declared defaults never produce these events. Argument files
+/// have already been expanded by `command::parse`.
+fn typed_options<'v>(argv: &[&'v OsStr]) -> Result<Typed, usage_rs::Error<'static, 'v>> {
+    let mut typed = Typed::new();
+    let mut parser = Parser::new(Cli::command(), argv);
+    while let Some(event) = parser.next_event() {
+        if let Event::Flag { flag, .. } = event? {
+            typed.insert(flag.name);
+        }
+    }
+    Ok(typed)
+}
+
+/// Fails when an option typed on the command line isn't used by `transcriber`.
+fn check_backend_options(transcriber: Transcriber, typed: &Typed) -> Result<(), ValidationError> {
+    let (backend, unused): (&str, &[&'static str]) = match transcriber {
+        Transcriber::Wit => ("wit", &["--model", "--device", "--model-dir"]),
+        Transcriber::Cohere => (
+            "cohere",
+            &[
+                "--words",
+                "--resend-gaps",
+                "--wit-token",
+                "--wit-rps",
+                "--wit-concurrency",
+                "--wit-attempts",
+                "--wit-max-audio",
+                "--wit-endpoint",
+                "--wit-api-url",
+                "--wit-api-version",
+                "--wit-audio",
+            ],
+        ),
+        Transcriber::Youtube => (
+            "youtube",
+            &[
+                "--recursive",
+                "--vad",
+                "--max-chunk",
+                "--merge",
+                "--vad-threshold",
+                "--min-speech-ms",
+                "--min-silence-ms",
+                "--speech-pad-ms",
+                "--pad",
+                "--pad-noise",
+                "--resend-gaps",
+                "--on-chunk-error",
+                "--wit-token",
+                "--wit-rps",
+                "--wit-concurrency",
+                "--wit-attempts",
+                "--wit-max-audio",
+                "--wit-endpoint",
+                "--wit-api-url",
+                "--wit-api-version",
+                "--wit-audio",
+                "--ffmpeg",
+                "--ffprobe",
+                "--model",
+                "--device",
+                "--model-dir",
+            ],
+        ),
+    };
+    match unused
+        .iter()
+        .find(|option| typed.contains(&option["--".len()..]))
+    {
+        Some(option) => {
+            Err(ValidationError::field(option)
+                .reason(format!("isn't used by --transcriber {backend}")))
+        }
+        None => Ok(()),
+    }
+}
+
+impl Run {
+    fn new(args: &Args, typed: &Typed) -> Result<Self, ValidationError> {
+        check_backend_options(args.transcriber, typed)?;
         let output_mode = args.output.mode()?;
         let output = args.output.writer()?;
         let ytdlp = args
             .tools
             .ytdlp(output_mode.dir().unwrap_or(Path::new(".")))?;
         let backend = match args.transcriber {
-            Transcriber::Wit => Backend::Wit(Box::new(WitRun::try_from(&args)?)),
-            Transcriber::Youtube => Backend::Youtube(youtube(&args)?),
+            Transcriber::Wit => Backend::Wit(Box::new(WitRun::new(args, typed)?)),
+            #[cfg(feature = "cohere")]
+            Transcriber::Cohere => Backend::Cohere(Box::new(CohereRun::new(args, typed)?)),
+            #[cfg(not(feature = "cohere"))]
+            Transcriber::Cohere => {
+                return Err(ValidationError::field("--transcriber")
+                    .value("cohere")
+                    .reason(
+                        "this build of tafrigh doesn't include Cohere; reinstall with \
+                         `cargo install tafrigh-cli --features cohere` or use a release archive",
+                    ));
+            }
+            Transcriber::Youtube => Backend::Youtube(youtube(args)?),
         };
         Ok(Self {
             inputs: args
@@ -125,12 +238,11 @@ impl TryFrom<Args> for Run {
 
 /// The captions backend: one exact language, and only URLs it supports.
 fn youtube(args: &Args) -> Result<YoutubeCaptions, ValidationError> {
-    let language = args.subtitle_language.as_deref().ok_or_else(|| {
-        ValidationError::field("--subtitle-language")
-            .reason("is required with --transcriber youtube")
+    let language = args.language.as_deref().ok_or_else(|| {
+        ValidationError::field("--language").reason("is required with --transcriber youtube")
     })?;
     let captions = YoutubeCaptions::new(language).map_err(|_| {
-        ValidationError::field("--subtitle-language").reason(
+        ValidationError::field("--language").reason(
             "expected one language code, such as ar or en-US; patterns and lists are not supported",
         )
     })?;
@@ -146,16 +258,50 @@ fn youtube(args: &Args) -> Result<YoutubeCaptions, ValidationError> {
     Ok(captions)
 }
 
-impl TryFrom<&Args> for WitRun {
-    type Error = ValidationError;
+/// How a backend chunks audio unless the command line says otherwise.
+#[derive(Clone, Copy)]
+struct Chunking {
+    /// `--max-chunk`, in seconds.
+    max_chunk: f64,
+    /// `--merge`.
+    merge: bool,
+}
 
-    fn try_from(args: &Args) -> Result<Self, ValidationError> {
-        if args.subtitle_language.is_some() {
-            return Err(ValidationError::field("--subtitle-language")
-                .reason("requires --transcriber youtube; use --wit-language for Wit"));
-        }
+/// Wit drops words near chunk edges and returns its own utterances, so short chunks work best.
+const WIT_CHUNKING: Chunking = Chunking {
+    max_chunk: 15.0,
+    merge: false,
+};
+
+/// Cohere was more accurate and faster with speech merged into chunks of up to 30 s than with
+/// 15 s chunks; each chunk becomes one segment.
+#[cfg(feature = "cohere")]
+const COHERE_CHUNKING: Chunking = Chunking {
+    max_chunk: 30.0,
+    merge: true,
+};
+
+impl Audio {
+    /// Decoding, segmentation and chunking from the segmentation options, using `default`
+    /// for chunking options that weren't typed. `word_timings` says whether the recognizer
+    /// returns word timings, which resending gaps needs.
+    fn new(
+        args: &Args,
+        typed: &Typed,
+        default: Chunking,
+        word_timings: bool,
+    ) -> Result<Self, ValidationError> {
         let segmentation = &args.segmentation;
-        let max_chunk = duration("--max-chunk", segmentation.max_chunk, Zero::Invalid)?;
+        let max_chunk = duration(
+            "--max-chunk",
+            segmentation.max_chunk.unwrap_or(default.max_chunk),
+            Zero::Invalid,
+        )?;
+        let merge = if typed.contains("merge") {
+            segmentation.merge
+        } else {
+            default.merge
+        };
         let pad = duration("--pad", segmentation.pad, Zero::Disables)?;
         let resend_gaps = duration("--resend-gaps", segmentation.resend_gaps, Zero::Disables)?;
         if !(0.0..=1.0).contains(&segmentation.vad_threshold) {
@@ -177,19 +323,6 @@ impl TryFrom<&Args> for WitRun {
             (Some(dbfs), false) => Some(Padding::white_noise(pad, dbfs)),
             (None, false) => Some(Padding::silence(pad)),
         };
-
-        let request = max_chunk.saturating_add(pad.saturating_mul(2));
-        let mut wit = args.wit.config(request)?;
-        wit.ffmpeg.clone_from(&args.tools.ffmpeg);
-        if request > wit.audio_limit() {
-            return Err(ValidationError::field("--max-chunk")
-                .value(segmentation.max_chunk.to_string())
-                .reason(format!(
-                    "chunk plus padding exceeds the {:?} Wit audio limit",
-                    wit.audio_limit()
-                )));
-        }
-
         let segmenter = match segmentation.vad {
             cli::Vad::Silero => SegmenterConfig::Silero(SileroConfig {
                 threshold: segmentation.vad_threshold,
@@ -202,18 +335,90 @@ impl TryFrom<&Args> for WitRun {
         };
         let chunks = ChunkOptions {
             max_chunk,
-            merge: segmentation.merge,
+            merge,
             padding,
             on_error: segmentation.on_chunk_error.into(),
             max_in_flight: None,
-            resend_gaps: (!resend_gaps.is_zero()).then_some(resend_gaps),
+            resend_gaps: (word_timings && !resend_gaps.is_zero()).then_some(resend_gaps),
         };
         Ok(Self {
             decoder: args.tools.decoder(),
             segmenter,
             chunks,
-            wit,
         })
+    }
+
+    /// Fails when a chunk plus padding, in the whole samples sent, exceeds the recognizer's
+    /// `limit`.
+    fn check_limit(&self, limit: Duration, name: &str) -> Result<(), ValidationError> {
+        if self.chunks.longest_request() > limit {
+            return Err(ValidationError::field("--max-chunk")
+                .value(self.chunks.max_chunk.as_secs_f64().to_string())
+                .reason(format!(
+                    "chunk plus padding exceeds the {limit:?} {name} audio limit"
+                )));
+        }
+        Ok(())
+    }
+}
+
+impl WitRun {
+    fn new(args: &Args, typed: &Typed) -> Result<Self, ValidationError> {
+        let audio = Audio::new(args, typed, WIT_CHUNKING, true)?;
+        let mut wit = args.wit.config(audio.chunks.longest_request())?;
+        wit.ffmpeg.clone_from(&args.tools.ffmpeg);
+        wit.language.clone_from(&args.language);
+        audio.check_limit(wit.audio_limit(), "Wit")?;
+        Ok(Self { audio, wit })
+    }
+}
+
+#[cfg(feature = "cohere")]
+impl CohereRun {
+    fn new(args: &Args, typed: &Typed) -> Result<Self, ValidationError> {
+        if let Some(format) = args
+            .output
+            .formats()?
+            .into_iter()
+            .find(|f| f.is_word_level())
+        {
+            return Err(ValidationError::field("--format")
+                .value(format.to_string())
+                .reason("needs word timings, which --transcriber cohere doesn't provide"));
+        }
+        let audio = Audio::new(args, typed, COHERE_CHUNKING, false)?;
+        audio.check_limit(tafrigh_cohere::MAX_AUDIO_DURATION, "Cohere")?;
+        let language = match args.language.as_deref() {
+            None => Language::default(),
+            Some(code) => code.parse().map_err(|_| {
+                ValidationError::field("--language")
+                    .value(code)
+                    .reason("expected ar or en with --transcriber cohere")
+            })?,
+        };
+        let models = &args.models;
+        let device: Device = models.device.parse().map_err(|_| {
+            ValidationError::field("--device")
+                .value(&models.device)
+                .reason("expected auto, cpu, gpu or gpu:N")
+        })?;
+        let model = ModelSource::from(models.model.as_str());
+        if let ModelSource::Local(path) = &model
+            && !path.is_file()
+        {
+            let variants: Vec<&str> = ModelVariant::ALL.iter().map(|v| v.name()).collect();
+            return Err(ValidationError::field("--model")
+                .value(&models.model)
+                .reason(format!(
+                    "expected a variant ({}) or an existing .gguf file",
+                    variants.join(", ")
+                )));
+        }
+        let mut cohere = CohereConfig::new(model);
+        cohere.model_dir.clone_from(&models.model_dir);
+        cohere.language = language;
+        cohere.device = device;
+        Ok(Self { audio, cohere })
     }
 }
 
@@ -333,7 +538,6 @@ impl cli::Wit {
             return Err(at_least_one("--wit-concurrency"));
         }
         let mut config = WitConfig::new(self.tokens.iter().cloned());
-        config.language.clone_from(&self.language);
         config.endpoint = self.endpoint.into();
         config.audio_format = self.audio.into();
         config.api_url.clone_from(&self.api_url);
@@ -486,9 +690,52 @@ mod tests {
             .collect())
     }
 
+    /// The chunk limit and merging a run uses for `argv` after the program name.
+    fn chunking(argv: &[&str]) -> (Duration, bool) {
+        let argv: Vec<_> = std::iter::once("tafrigh")
+            .chain(argv.iter().copied())
+            .map(std::ffi::OsStr::new)
+            .collect();
+        let Ok(super::Plan::Transcribe(run)) = super::Plan::parse_from(&argv) else {
+            panic!("expected a transcription run");
+        };
+        let audio = match run.backend {
+            super::Backend::Wit(wit) => wit.audio,
+            #[cfg(feature = "cohere")]
+            super::Backend::Cohere(cohere) => cohere.audio,
+            super::Backend::Youtube(_) => panic!("expected an audio backend"),
+        };
+        (audio.chunks.max_chunk, audio.chunks.merge)
+    }
+
+    #[test]
+    fn wit_sends_15_second_chunks_without_merging_by_default() {
+        let wit = ["x.mp3", "--transcriber", "wit", "-w", "t"];
+        assert_eq!(chunking(&wit), (Duration::from_secs(15), false));
+        assert_eq!(
+            chunking(&[&wit[..], &["--merge", "--max-chunk", "30"]].concat()),
+            (Duration::from_secs(30), true)
+        );
+    }
+
+    #[cfg(feature = "cohere")]
+    #[test]
+    fn cohere_merges_speech_up_to_30_seconds_by_default() {
+        let cohere = ["x.mp3", "--transcriber", "cohere"];
+        assert_eq!(chunking(&cohere), (Duration::from_secs(30), true));
+        assert_eq!(
+            chunking(&[&cohere[..], &["--no-merge", "--max-chunk", "15"]].concat()),
+            (Duration::from_secs(15), false)
+        );
+    }
+
     #[test]
     fn sends_opus_encoded_by_the_configured_ffmpeg_unless_asked_for_wav() {
-        let wit = |flags: &[&str]| super::WitRun::try_from(&parse(flags).unwrap()).unwrap().wit;
+        let wit = |flags: &[&str]| {
+            super::WitRun::new(&parse(flags).unwrap(), &super::Typed::new())
+                .unwrap()
+                .wit
+        };
         let opus = wit(&["--ffmpeg", "/opt/ffmpeg/bin/ffmpeg"]);
         assert_eq!(opus.audio_format, super::AudioFormat::Opus);
         assert_eq!(opus.ffmpeg, std::path::Path::new("/opt/ffmpeg/bin/ffmpeg"));

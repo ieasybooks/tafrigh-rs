@@ -5,6 +5,7 @@ idiomatic_version_file_enable_tools = ["rust"]
 yt-dlp = "github:yt-dlp/yt-dlp-nightly-builds"
 
 [tools]
+cmake = "4.4.4"
 ffmpeg = "latest"
 yt-dlp = { version = "latest", prerelease = true }
 python = "3.12"

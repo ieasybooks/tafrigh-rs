@@ -16,10 +16,18 @@ name = "tafrigh"
 path = "src/main.rs"
 doc = false
 
+[features]
+## `--transcriber cohere`: Cohere Transcribe Arabic on this machine. Building it needs CMake and a
+## C++ compiler.
+cohere = ["dep:tafrigh-cohere"]
+## Cohere on NVIDIA GPUs. Building it also needs the CUDA toolkit.
+cuda = ["cohere", "tafrigh-cohere/cuda"]
+
 [dependencies]
 tafrigh = { path = "crates/tafrigh", version = "0.3.0" }
 tafrigh-wit = { path = "crates/tafrigh-wit", version = "0.3.0" }
 tafrigh-youtube = { path = "crates/tafrigh-youtube", version = "0.3.0" }
+tafrigh-cohere = { path = "crates/tafrigh-cohere", version = "0.3.0", optional = true }
 anyhow.workspace = true
 indicatif.workspace = true
 shell-words.workspace = true
@@ -38,8 +46,8 @@ workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube"]
-default-members = [".", "crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube"]
+members = ["crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere"]
+default-members = [".", "crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere"]
 
 [workspace.package]
 edition = "2024"

@@ -49,6 +49,11 @@ pub trait ChunkRecognizer: Send + Sync {
     /// `chunk.samples` (padding included). Implementations handle their own retries.
     async fn recognize(&self, chunk: &AudioChunk) -> Result<Recognition, BoxError>;
 
+    /// Whether recognitions carry word timings, as required for gap resends.
+    fn word_timings(&self) -> bool {
+        true
+    }
+
     /// Longest audio (padding included) accepted per request.
     fn max_audio_duration(&self) -> Option<Duration> {
         None
@@ -117,6 +122,10 @@ impl<T: CaptionProvider + ?Sized> CaptionProvider for std::sync::Arc<T> {
 impl<T: ChunkRecognizer + ?Sized> ChunkRecognizer for std::sync::Arc<T> {
     async fn recognize(&self, chunk: &AudioChunk) -> Result<Recognition, BoxError> {
         (**self).recognize(chunk).await
+    }
+
+    fn word_timings(&self) -> bool {
+        (**self).word_timings()
     }
 
     fn max_audio_duration(&self) -> Option<Duration> {

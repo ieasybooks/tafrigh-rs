@@ -2,6 +2,8 @@
 
 Read `README.md` for setup and project context. Use the toolchain pinned in `rust-toolchain.toml`. Install configured development tools with `mise install`.
 
+Building the workspace includes transcribe.cpp through `tafrigh-cohere` and requires CMake (pinned in mise) and a C++ compiler. Model-free tests need no Cohere weights; set `TAFRIGH_TEST_COHERE_MODEL` to a local GGUF to enable the real-model test.
+
 ## Workflow and communication
 
 - Check relevant code and documentation before asking factual questions. Ask the user about intent and preferences when those remain unclear.

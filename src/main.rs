@@ -1,4 +1,5 @@
-//! `tafrigh`: transcribe with Wit.ai or retrieve existing [YouTube](https://www.youtube.com) captions.
+//! `tafrigh`: transcribe with Wit.ai or Cohere Transcribe Arabic, or retrieve existing
+//! [YouTube](https://www.youtube.com) captions.
 
 mod cli;
 mod command;
@@ -12,6 +13,8 @@ use std::time::Duration;
 use anyhow::Context;
 use tafrigh::source::Input;
 use tafrigh::{ChunkedTranscriber, Event, Tafrigh};
+#[cfg(feature = "cohere")]
+use tafrigh_cohere::CohereRecognizer;
 use tafrigh_wit::{WitError, WitRecognizer};
 use tracing_subscriber::EnvFilter;
 
@@ -77,8 +80,9 @@ async fn start(run: Run, ui: &Ui) -> anyhow::Result<ExitCode> {
     let needs_ytdlp = run.inputs.iter().any(Input::is_url);
     let builder = match run.backend {
         Backend::Wit(wit) => {
-            setup::check_tools(Some(&wit.decoder), needs_ytdlp.then_some(&run.ytdlp)).await?;
-            let segmenter = wit.segmenter.build()?;
+            let audio = wit.audio;
+            setup::check_tools(Some(&audio.decoder), needs_ytdlp.then_some(&run.ytdlp)).await?;
+            let segmenter = audio.segmenter.build()?;
             let tokens = wit.wit.tokens.len();
             let recognizer = WitRecognizer::new(wit.wit)
                 .await
@@ -93,8 +97,30 @@ async fn start(run: Run, ui: &Ui) -> anyhow::Result<ExitCode> {
                 "Wit.ai: {tokens} token(s), language {}",
                 recognizer.language()
             );
-            let transcriber = ChunkedTranscriber::new(segmenter, recognizer, wit.chunks)?
-                .with_decoder(wit.decoder);
+            let transcriber = ChunkedTranscriber::new(segmenter, recognizer, audio.chunks)?
+                .with_decoder(audio.decoder);
+            Tafrigh::builder(transcriber)
+        }
+        #[cfg(feature = "cohere")]
+        Backend::Cohere(cohere) => {
+            let audio = cohere.audio;
+            setup::check_tools(Some(&audio.decoder), needs_ytdlp.then_some(&run.ytdlp)).await?;
+            let segmenter = audio.segmenter.build()?;
+            let model = cohere.cohere.model.clone();
+            let download = ui.download(format!("Cohere Transcribe Arabic {model}"));
+            let recognizer = CohereRecognizer::load_with_progress(cohere.cohere, |progress| {
+                download.update(progress.downloaded, progress.total);
+            })
+            .await;
+            download.finish();
+            let recognizer = recognizer.context("setting up Cohere Transcribe Arabic")?;
+            tracing::info!(
+                "Cohere Transcribe Arabic: {model} on {} ({})",
+                recognizer.backend(),
+                recognizer.device_name()
+            );
+            let transcriber = ChunkedTranscriber::new(segmenter, recognizer, audio.chunks)?
+                .with_decoder(audio.decoder);
             Tafrigh::builder(transcriber)
         }
         Backend::Youtube(captions) => {
@@ -125,9 +151,18 @@ async fn start(run: Run, ui: &Ui) -> anyhow::Result<ExitCode> {
 
 fn init_logging(verbose: u8, ui: &Ui) {
     let default = match verbose {
-        0 => "warn,tafrigh=info,tafrigh_wit=info,tafrigh_youtube=info,tafrigh_cli=info",
-        1 => "warn,tafrigh=debug,tafrigh_wit=debug,tafrigh_youtube=debug,tafrigh_cli=debug",
-        _ => "info,tafrigh=trace,tafrigh_wit=trace,tafrigh_youtube=trace,tafrigh_cli=trace",
+        0 => {
+            "warn,tafrigh=info,tafrigh_wit=info,tafrigh_cohere=info,tafrigh_youtube=info,\
+             tafrigh_cli=info,transcribe_cpp=error"
+        }
+        1 => {
+            "warn,tafrigh=debug,tafrigh_wit=debug,tafrigh_cohere=debug,tafrigh_youtube=debug,\
+             tafrigh_cli=debug,transcribe_cpp=info"
+        }
+        _ => {
+            "info,tafrigh=trace,tafrigh_wit=trace,tafrigh_cohere=trace,tafrigh_youtube=trace,\
+             tafrigh_cli=trace,transcribe_cpp=debug"
+        }
     };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
     tracing_subscriber::fmt()

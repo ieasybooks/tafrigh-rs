@@ -30,7 +30,11 @@ pub fn parse() -> Result<Plan, ExitCode> {
             code: 2,
         })
     })?;
-    match Cli::embedded_outcome_into(&argv) {
+    let argv: Vec<_> = argv.iter().map(OsString::as_os_str).collect();
+    if Cli::spec_request(&argv).is_some() {
+        return Ok(Plan::Spec);
+    }
+    match usage_rs::embedded::outcome(Cli::spec(), Cli::command(), &argv, Plan::parse_from) {
         Outcome::Parsed(plan) => Ok(plan),
         Outcome::Exit(exit) => Err(print_exit(&exit)),
     }
