@@ -151,6 +151,52 @@ async fn retries_rate_limits_and_server_errors() {
     assert_eq!(server.received_requests().await.unwrap().len(), 3);
 }
 
+/// Refuses the first request with `Retry-After: 1` and records when each request arrives.
+struct RetryAfterOnce {
+    arrivals: Arc<Mutex<Vec<std::time::Instant>>>,
+}
+
+impl Respond for RetryAfterOnce {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        let mut arrivals = self.arrivals.lock().unwrap();
+        arrivals.push(std::time::Instant::now());
+        if arrivals.len() == 1 {
+            ResponseTemplate::new(429).insert_header("retry-after", "1")
+        } else {
+            dictation("ok")
+        }
+    }
+}
+
+#[tokio::test]
+async fn retry_after_holds_requests_already_waiting() {
+    let server = MockServer::start().await;
+    let arrivals = Arc::new(Mutex::new(Vec::new()));
+    Mock::given(method("POST"))
+        .respond_with(RetryAfterOnce {
+            arrivals: arrivals.clone(),
+        })
+        .mount(&server)
+        .await;
+    let mut config = config(&server, &["t"]);
+    config.requests_per_second = 4.0;
+    config.max_in_flight_per_token = 4;
+    let recognizer = WitRecognizer::new(config).await.unwrap();
+    let chunk = chunk(160);
+    // Four requests book starts 250ms apart; the first is told to wait a second.
+    let results = futures::future::join_all((0..4).map(|_| recognizer.recognize(&chunk))).await;
+    assert!(results.iter().all(Result::is_ok));
+    let arrivals = arrivals.lock().unwrap();
+    assert_eq!(arrivals.len(), 5);
+    for later in &arrivals[1..] {
+        let after = *later - arrivals[0];
+        assert!(
+            after >= Duration::from_millis(950),
+            "sent {after:?} after the 429"
+        );
+    }
+}
+
 fn rate_limit(scope: &str) -> ResponseTemplate {
     ResponseTemplate::new(429).set_body_string(
         serde_json::json!({
