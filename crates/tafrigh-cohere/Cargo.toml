@@ -1,7 +1,7 @@
 [package]
 name = "tafrigh-cohere"
 description = "Local Cohere Transcribe Arabic recognition for tafrigh through transcribe.cpp."
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,7 +14,7 @@ categories = ["multimedia::audio", "api-bindings"]
 cuda = ["transcribe-cpp/cuda"]
 
 [dependencies]
-tafrigh = { path = "../tafrigh", version = "0.3.0" }
+tafrigh = { path = "../tafrigh", version = "0.4.0" }
 async-trait.workspace = true
 dirs = "7.0.0"
 reqwest.workspace = true
