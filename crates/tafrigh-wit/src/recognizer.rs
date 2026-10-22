@@ -1,5 +1,5 @@
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use reqwest::header::{ACCEPT, CONTENT_TYPE, RETRY_AFTER};
@@ -134,9 +134,24 @@ impl ChunkRecognizer for WitRecognizer {
         let timeout = self.config.timeout_for(chunk.audio_duration());
         let mut attempt = 0;
         let mut rate_limited = 0;
+        let mut requests = 0;
         loop {
             let slot = self.scheduler.acquire().await;
-            let err = match self.request(slot.token(), body.clone(), timeout).await {
+            requests += 1;
+            let load = self.scheduler.load();
+            let sent = Instant::now();
+            let result = self.request(slot.token(), body.clone(), timeout).await;
+            tracing::debug!(
+                "chunk #{} request {requests}: {:.2}s of audio in {} bytes on token {} ({load}): \
+                 {} after {:.2?}",
+                chunk.index,
+                chunk.audio_duration().as_secs_f64(),
+                body.len(),
+                slot.token() + 1,
+                outcome(&result),
+                sent.elapsed()
+            );
+            let err = match result {
                 Ok(utterances) => {
                     slot.succeeded();
                     return Ok(Recognition {
@@ -198,5 +213,15 @@ impl ChunkRecognizer for WitRecognizer {
 
     fn max_in_flight(&self) -> usize {
         self.config.tokens.len() * self.config.max_in_flight_per_token
+    }
+}
+
+/// A short description of a request's outcome, for logs.
+fn outcome(result: &Result<Vec<Utterance>, WitError>) -> String {
+    match result {
+        Ok(utterances) => format!("{} utterance(s)", utterances.len()),
+        Err(WitError::Status { status, .. }) => format!("HTTP {status}"),
+        Err(WitError::Request(err)) if err.is_timeout() => "timed out".into(),
+        Err(_) => "failed".into(),
     }
 }

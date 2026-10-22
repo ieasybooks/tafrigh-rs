@@ -7,6 +7,7 @@
 //! about one for every `limit` successes (additive increase, multiplicative decrease, as in
 //! TCP).
 
+use std::fmt;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -182,6 +183,17 @@ impl Scheduler {
         }
     }
 
+    /// Requests in the scheduler now, for logs.
+    pub fn load(&self) -> Load {
+        let state = self.lock();
+        let booked: usize = state.tokens.iter().map(|token| token.in_flight).sum();
+        Load {
+            sending: state.sending,
+            waiting: booked - state.sending,
+            limit: state.limit.allowed(),
+        }
+    }
+
     /// Adds or removes permits to match the limit. Permits in use when the limit is cut are
     /// owed, and dropped as they are released.
     fn resize(&self, state: &mut State) {
@@ -233,6 +245,23 @@ impl Limit {
         self.value = self.value.min((sending as f64 / 2.0).max(1.0));
         self.cuts += 1;
         Some(self.allowed())
+    }
+}
+
+/// Requests being sent and waiting for their start, and the limit on both together.
+pub(crate) struct Load {
+    sending: usize,
+    waiting: usize,
+    limit: usize,
+}
+
+impl fmt::Display for Load {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} sending, {} waiting, at most {} at once",
+            self.sending, self.waiting, self.limit
+        )
     }
 }
 
