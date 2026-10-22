@@ -26,6 +26,13 @@ pub(crate) fn duration_to_samples(duration: Duration) -> usize {
     seconds_to_samples(duration.as_secs_f64())
 }
 
+/// Duration of `samples` samples at [`SAMPLE_RATE`], exact to the nanosecond.
+pub(crate) fn samples_to_duration(samples: usize) -> Duration {
+    let rate = SAMPLE_RATE as usize;
+    Duration::from_secs((samples / rate) as u64)
+        + Duration::from_nanos((samples % rate) as u64 * 1_000_000_000 / u64::from(SAMPLE_RATE))
+}
+
 /// A piece of the source audio sent to a recognizer.
 #[derive(Debug, Clone)]
 pub struct AudioChunk {

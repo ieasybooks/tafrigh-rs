@@ -741,11 +741,11 @@ async fn audio_limits_depend_on_the_endpoint() {
     // Dictation: up to 60s per request.
     assert!(build(config(&server, &["t"]), 58).await.is_ok());
     let err = build(config(&server, &["t"]), 59).await.err().unwrap();
-    assert!(err.to_string().contains("60.00s limit"), "{err}");
+    assert!(err.to_string().contains("60s limit"), "{err}");
 
     // Speech: up to 20s per request.
     let mut speech = config(&server, &["t"]);
     speech.endpoint = Endpoint::Speech;
     let err = build(speech, 19).await.err().unwrap();
-    assert!(err.to_string().contains("20.00s limit"), "{err}");
+    assert!(err.to_string().contains("20s limit"), "{err}");
 }

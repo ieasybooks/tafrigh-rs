@@ -9,8 +9,8 @@ use tokio::sync::mpsc;
 
 use super::{ChunkRecognizer, Recognition, Transcriber};
 use crate::audio::{
-    AudioChunk, Decoder, Padding, SAMPLE_RATE, duration_to_samples, samples_to_seconds,
-    seconds_to_samples,
+    AudioChunk, Decoder, Padding, SAMPLE_RATE, duration_to_samples, samples_to_duration,
+    samples_to_seconds, seconds_to_samples,
 };
 use crate::error::task_result;
 use crate::event::{Progress, TranscribeEvent};
@@ -64,6 +64,20 @@ impl Default for ChunkOptions {
     }
 }
 
+impl ChunkOptions {
+    /// The longest audio sent per request: a chunk plus padding on both sides, counted in the
+    /// whole samples that chunking and padding round them to.
+    #[must_use]
+    pub fn longest_request(&self) -> Duration {
+        let pad = self
+            .padding
+            .map_or(0, |padding| duration_to_samples(padding.length));
+        samples_to_duration(
+            duration_to_samples(self.max_chunk).saturating_add(pad.saturating_mul(2)),
+        )
+    }
+}
+
 /// Decodes a file, segments it into speech chunks and recognizes them with a
 /// [`ChunkRecognizer`], all streamed: requests start while the file is still being decoded,
 /// and only the audio of unfinished chunks is kept in memory.
@@ -87,9 +101,9 @@ impl ChunkedTranscriber {
     /// Pairs a segmenter with a recognizer. Both may also be shared `Arc`s, including
     /// `Arc<dyn Segmenter>` and `Arc<dyn ChunkRecognizer>` chosen at runtime.
     ///
-    /// Fails when `options` are out of range or chunks (plus padding) would exceed the
-    /// recognizer's [`ChunkRecognizer::max_audio_duration`], or when gap resends are enabled
-    /// for a recognizer without word timings.
+    /// Fails when `options` are out of range, when [`ChunkOptions::longest_request`] exceeds
+    /// the recognizer's [`ChunkRecognizer::max_audio_duration`], or when gap resends are
+    /// enabled for a recognizer without word timings.
     pub fn new(
         segmenter: impl Segmenter + 'static,
         recognizer: impl ChunkRecognizer + 'static,
@@ -115,15 +129,12 @@ impl ChunkedTranscriber {
                 "the gap that triggers a resend must be at least one sample".into(),
             ));
         }
-        let padding = options
-            .padding
-            .map_or(Duration::ZERO, |p| p.length)
-            .saturating_mul(2);
+        let request = options.longest_request();
         if let Some(limit) = recognizer.max_audio_duration()
-            && options.max_chunk.saturating_add(padding) > limit
+            && request > limit
         {
             return Err(Error::Config(format!(
-                "chunks of {:.2?} plus {padding:.2?} padding exceed the recognizer's {limit:.2?} limit",
+                "chunks of {:?} plus padding, {request:?} in whole samples, exceed the recognizer's {limit:?} limit",
                 options.max_chunk,
             )));
         }
@@ -1160,5 +1171,31 @@ mod tests {
             error.to_string().contains("exceed the recognizer's"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn checks_the_limit_against_the_samples_sent() {
+        let segmenter = crate::segment::FixedWindows::new(Duration::from_secs(399)).unwrap();
+        // 6,399,999 samples.
+        let limit = Duration::from_nanos(399_999_937_500);
+        let options = |padding| ChunkOptions {
+            max_chunk: Duration::from_secs(399),
+            padding: Some(Padding::silence(padding)),
+            ..ChunkOptions::default()
+        };
+        // 7,999.5 samples of padding: the durations add up to the limit, but the padding rounds
+        // up to 8,000 samples on each side.
+        let rounded_up = options(Duration::from_nanos(499_968_750));
+        assert_eq!(rounded_up.longest_request(), Duration::from_secs(400));
+        let error =
+            ChunkedTranscriber::new(segmenter, LimitedRecognizer(limit), rounded_up).unwrap_err();
+        assert!(
+            error.to_string().contains("400s in whole samples"),
+            "{error}"
+        );
+        // 7,999 samples on each side fit.
+        let fits = options(Duration::from_nanos(499_937_500));
+        assert_eq!(fits.longest_request(), Duration::from_micros(399_999_875));
+        ChunkedTranscriber::new(segmenter, LimitedRecognizer(limit), fits).unwrap();
     }
 }
