@@ -262,7 +262,7 @@ impl Transcriber for ChunkedTranscriber {
                                     for again in
                                         self.resends(&request, &recognized.segments, min_gap)
                                     {
-                                        tally.sent(&again);
+                                        tally.queued(&again);
                                         inflight.push(recognize(self.recognizer.clone(), again));
                                     }
                                 }
@@ -286,7 +286,7 @@ impl Transcriber for ChunkedTranscriber {
                             start: meta.start,
                             end: meta.end,
                         });
-                        tally.sent(&request);
+                        tally.queued(&request);
                         inflight.push(recognize(self.recognizer.clone(), *request));
                     }
                     Some(Produced::Decoded(seconds)) => {
@@ -315,7 +315,8 @@ impl Transcriber for ChunkedTranscriber {
     }
 }
 
-/// Requests made for one file, for logs.
+/// Recognition requests queued for one file, for logs. Retries inside the recognizer are not
+/// counted here; the recognizer logs each upload.
 #[derive(Default)]
 struct Tally {
     chunks: usize,
@@ -323,12 +324,12 @@ struct Tally {
     resends: usize,
     resends_with_words: usize,
     answered: usize,
-    /// Seconds of audio sent, padding included.
+    /// Seconds of audio queued for recognition, padding included.
     audio: f64,
 }
 
 impl Tally {
-    fn sent(&mut self, request: &Request) {
+    fn queued(&mut self, request: &Request) {
         match request.kind {
             RequestKind::Chunk { .. } => self.chunks += 1,
             RequestKind::Resend => self.resends += 1,
@@ -351,7 +352,7 @@ impl std::fmt::Display for Tally {
         write!(
             f,
             "{} chunk(s), {} without words; {} resend(s), {} with words; {} unanswered (failed \
-             or cancelled); {:.1}s of audio sent, padding included",
+             or cancelled); {:.1}s of audio queued for recognition, padding included",
             self.chunks,
             self.empty_chunks,
             self.resends,
@@ -1025,13 +1026,13 @@ mod tests {
         let chunk = request(0, 4 * S, S / 2, &[(0, 4 * S)]);
         let resend = chunk.resend(span(S, 3 * S), Some(half_second));
         let mut tally = Tally::default();
-        tally.sent(&chunk);
-        tally.sent(&resend);
+        tally.queued(&chunk);
+        tally.queued(&resend);
         tally.recognized(false, true);
         assert_eq!(
             tally.to_string(),
             "1 chunk(s), 1 without words; 1 resend(s), 0 with words; 1 unanswered (failed or \
-             cancelled); 8.0s of audio sent, padding included"
+             cancelled); 8.0s of audio queued for recognition, padding included"
         );
         tally.recognized(true, false);
         assert!(
