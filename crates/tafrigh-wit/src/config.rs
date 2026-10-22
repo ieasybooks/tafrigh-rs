@@ -46,9 +46,11 @@ pub struct WitConfig {
     pub api_version: String,
     /// Request starts allowed per second for each token.
     pub requests_per_second: f64,
-    /// Concurrent requests per token. Wit answers at about the pace of the audio, so keeping
-    /// up with [`Self::requests_per_second`] takes about the rate times (seconds of audio per
-    /// request + 2). The default, 18, suits 1 request a second with chunks up to 16s.
+    /// Most concurrent requests per token. Wit answers at about the pace of the audio, so
+    /// keeping up with [`Self::requests_per_second`] takes about the rate times (seconds of
+    /// audio per request + 2). The default, 18, suits 1 request a second with chunks up to 16s.
+    /// Fewer requests run at once while Wit or the network seems overloaded: timeouts and server
+    /// errors halve the requests being sent, and successes raise the limit again.
     pub max_in_flight_per_token: usize,
     /// Attempts per chunk, including the first.
     pub max_attempts: u32,

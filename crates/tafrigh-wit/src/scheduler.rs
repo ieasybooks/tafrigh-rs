@@ -1,6 +1,11 @@
 //! Spreads requests over tokens, with a minimum interval between request starts per token and
 //! a cap on concurrent requests per token. Each request goes to the token that can start it
 //! soonest, so a slow or rate-limited token does not hold up the others.
+//!
+//! A shared limit on requests at once backs off when Wit or the network is overloaded: it
+//! halves the requests being sent when one times out or meets a server error, then grows by
+//! about one for every `limit` successes (additive increase, multiplicative decrease, as in
+//! TCP).
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -9,10 +14,22 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 use tokio::time::Instant;
 
 pub(crate) struct Scheduler {
+    /// One permit per request booked or being sent, up to the limit.
     permits: Semaphore,
-    tokens: Mutex<Vec<TokenState>>,
+    state: Mutex<State>,
     per_token: usize,
     interval: Duration,
+}
+
+struct State {
+    tokens: Vec<TokenState>,
+    limit: Limit,
+    /// Permits that remain once the owed ones are gone; follows the limit.
+    permits: usize,
+    /// Permits to drop when released, because the limit was cut below the permits in use.
+    owed: usize,
+    /// Requests being sent.
+    sending: usize,
 }
 
 struct TokenState {
@@ -27,13 +44,24 @@ struct TokenState {
     in_flight: usize,
 }
 
+/// Requests allowed at once.
+struct Limit {
+    /// Fractional, so that each success can raise it by `1 / value`.
+    value: f64,
+    max: usize,
+    /// When the limit was last cut. Failures of requests that started by then belong to the
+    /// same overload, so they do not cut it again.
+    last_cut: Option<Instant>,
+}
+
 impl Scheduler {
     pub fn new(tokens: usize, per_token: usize, interval: Duration) -> Self {
         let now = Instant::now();
+        let max = tokens * per_token;
         Self {
-            permits: Semaphore::new(tokens * per_token),
-            tokens: Mutex::new(
-                (0..tokens)
+            permits: Semaphore::new(max),
+            state: Mutex::new(State {
+                tokens: (0..tokens)
                     .map(|_| TokenState {
                         next_start: now,
                         after_started: now,
@@ -42,7 +70,15 @@ impl Scheduler {
                         in_flight: 0,
                     })
                     .collect(),
-            ),
+                limit: Limit {
+                    value: max as f64,
+                    max,
+                    last_cut: None,
+                },
+                permits: max,
+                owed: 0,
+                sending: 0,
+            }),
             per_token,
             interval,
         }
@@ -55,12 +91,17 @@ impl Scheduler {
             .acquire()
             .await
             .expect("semaphore is never closed");
+        let permit = Permit {
+            scheduler: self,
+            permit: Some(permit),
+        };
         loop {
             let (booking, start) = self.book();
             tokio::time::sleep_until(start).await;
             if self.start(&booking, start) {
                 return Slot {
                     booking,
+                    start,
                     _permit: permit,
                 };
             }
@@ -71,33 +112,35 @@ impl Scheduler {
 
     /// Books the soonest start on a token with capacity.
     fn book(&self) -> (Booking<'_>, Instant) {
-        let mut tokens = self.lock();
+        let mut state = self.lock();
         let now = Instant::now();
-        let (token, state) = tokens
+        let (index, token) = state
+            .tokens
             .iter_mut()
             .enumerate()
-            .filter(|(_, state)| state.in_flight < self.per_token)
-            .min_by_key(|(_, state)| state.next_start)
+            .filter(|(_, token)| token.in_flight < self.per_token)
+            .min_by_key(|(_, token)| token.next_start)
             .expect("a permit implies a token with capacity");
-        let start = state.next_start.max(now);
-        state.next_start = start + self.interval;
-        state.in_flight += 1;
+        let start = token.next_start.max(now);
+        token.next_start = start + self.interval;
+        token.in_flight += 1;
         let booking = Booking {
             scheduler: self,
-            token,
-            holds: state.holds,
+            token: index,
+            holds: token.holds,
         };
         (booking, start)
     }
 
     /// Records that `booking` starts at `start`, unless its token was held after it was booked.
     fn start(&self, booking: &Booking<'_>, start: Instant) -> bool {
-        let mut tokens = self.lock();
-        let state = &mut tokens[booking.token];
-        if state.holds != booking.holds {
+        let mut state = self.lock();
+        let token = &mut state.tokens[booking.token];
+        if token.holds != booking.holds {
             return false;
         }
-        state.after_started = state.after_started.max(start + self.interval);
+        token.after_started = token.after_started.max(start + self.interval);
+        state.sending += 1;
         true
     }
 
@@ -105,19 +148,35 @@ impl Scheduler {
     /// already waiting for this token book again after the hold.
     pub fn hold(&self, token: usize, delay: Duration) {
         let until = Instant::now() + delay;
-        self.lock()[token].hold(until);
+        self.lock().tokens[token].hold(until);
     }
 
     /// Delays the next request on every token, e.g. when an account-wide limit is reached.
     pub fn hold_all(&self, delay: Duration) {
         let until = Instant::now() + delay;
-        for state in self.lock().iter_mut() {
-            state.hold(until);
+        for token in &mut self.lock().tokens {
+            token.hold(until);
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<TokenState>> {
-        self.tokens
+    /// Adds or removes permits to match the limit. Permits in use when the limit is cut are
+    /// owed, and dropped as they are released.
+    fn resize(&self, state: &mut State) {
+        let allowed = state.limit.allowed();
+        if allowed > state.permits {
+            let added = allowed - state.permits;
+            let repaid = added.min(state.owed);
+            state.owed -= repaid;
+            self.permits.add_permits(added - repaid);
+        } else {
+            let removed = state.permits - allowed;
+            state.owed += removed - self.permits.forget_permits(removed);
+        }
+        state.permits = allowed;
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
@@ -133,6 +192,45 @@ impl TokenState {
     }
 }
 
+impl Limit {
+    fn allowed(&self) -> usize {
+        (self.value as usize).clamp(1, self.max)
+    }
+
+    fn succeeded(&mut self) {
+        self.value = (self.value + 1.0 / self.value).min(self.max as f64);
+    }
+
+    /// Cuts the limit to half the requests being sent, unless the failed request started by
+    /// the last cut. Returns the new limit when it was cut.
+    fn overloaded(&mut self, started: Instant, sending: usize) -> Option<usize> {
+        if self.last_cut.is_some_and(|cut| started <= cut) {
+            return None;
+        }
+        self.value = self.value.min((sending as f64 / 2.0).max(1.0));
+        self.last_cut = Some(Instant::now());
+        Some(self.allowed())
+    }
+}
+
+/// A semaphore permit that is dropped instead of released while the limit is owed permits.
+struct Permit<'a> {
+    scheduler: &'a Scheduler,
+    permit: Option<SemaphorePermit<'a>>,
+}
+
+impl Drop for Permit<'_> {
+    fn drop(&mut self) {
+        let mut state = self.scheduler.lock();
+        if state.owed > 0 {
+            state.owed -= 1;
+            if let Some(permit) = self.permit.take() {
+                permit.forget();
+            }
+        }
+    }
+}
+
 /// A booked start on a token; releases the token's capacity when dropped.
 struct Booking<'a> {
     scheduler: &'a Scheduler,
@@ -143,20 +241,46 @@ struct Booking<'a> {
 
 impl Drop for Booking<'_> {
     fn drop(&mut self) {
-        self.scheduler.lock()[self.token].in_flight -= 1;
+        self.scheduler.lock().tokens[self.token].in_flight -= 1;
     }
 }
 
 /// A request slot that may start now; releases its token capacity when dropped.
 pub(crate) struct Slot<'a> {
     booking: Booking<'a>,
-    _permit: SemaphorePermit<'a>,
+    start: Instant,
+    _permit: Permit<'a>,
 }
 
 impl Slot<'_> {
     /// Index of the token this slot belongs to.
     pub fn token(&self) -> usize {
         self.booking.token
+    }
+
+    /// Reports that the request succeeded, so more may run at once.
+    pub fn succeeded(&self) {
+        let scheduler = self.booking.scheduler;
+        let mut state = scheduler.lock();
+        state.limit.succeeded();
+        scheduler.resize(&mut state);
+    }
+
+    /// Reports that the request failed in a way that suggests Wit or the network is
+    /// overloaded, so fewer may run at once. Returns the new limit when it was cut.
+    pub fn overloaded(&self) -> Option<usize> {
+        let scheduler = self.booking.scheduler;
+        let mut state = scheduler.lock();
+        let sending = state.sending;
+        let cut = state.limit.overloaded(self.start, sending);
+        scheduler.resize(&mut state);
+        cut
+    }
+}
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.booking.scheduler.lock().sending -= 1;
     }
 }
 
@@ -284,5 +408,74 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(10)).await;
         scheduler.hold_all(Duration::from_secs(3));
         assert_eq!(starts.await, [(0, 3010), (1, 3010), (0, 4010), (1, 4010)]);
+    }
+
+    /// Whether another request could start within a second.
+    async fn has_room(scheduler: &Scheduler) -> bool {
+        tokio::time::timeout(Duration::from_secs(1), scheduler.acquire())
+            .await
+            .is_ok()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn overloads_halve_the_requests_being_sent() {
+        let scheduler = Scheduler::new(1, 8, Duration::ZERO);
+        let mut slots = Vec::new();
+        for _ in 0..8 {
+            slots.push(scheduler.acquire().await);
+        }
+        assert_eq!(slots[0].overloaded(), Some(4));
+        // Started before the cut: the same overload.
+        assert_eq!(slots[1].overloaded(), None);
+        slots.clear();
+
+        tokio::time::advance(Duration::from_millis(1)).await;
+        for _ in 0..4 {
+            slots.push(scheduler.acquire().await);
+        }
+        assert!(!has_room(&scheduler).await);
+        // Started after the cut, so it cuts again.
+        assert_eq!(slots[0].overloaded(), Some(2));
+        slots.truncate(1);
+        assert_eq!(slots[0].overloaded(), None);
+        slots.clear();
+        let a = scheduler.acquire().await;
+        let b = scheduler.acquire().await;
+        assert!(!has_room(&scheduler).await);
+        // Never below one request at once.
+        drop(b);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        let c = scheduler.acquire().await;
+        drop(a);
+        assert_eq!(c.overloaded(), Some(1));
+        assert!(!has_room(&scheduler).await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn successes_raise_the_limit_again() {
+        let scheduler = Scheduler::new(1, 8, Duration::ZERO);
+        let mut slots = Vec::new();
+        for _ in 0..8 {
+            slots.push(scheduler.acquire().await);
+        }
+        slots[0].overloaded();
+        slots.truncate(4);
+        // About one more request at once for every `limit` successes: 4.25, 4.49, 4.71, 4.92.
+        for _ in 0..4 {
+            slots[0].succeeded();
+        }
+        assert!(!has_room(&scheduler).await);
+        slots[0].succeeded();
+        let _fifth = scheduler.acquire().await;
+        assert!(!has_room(&scheduler).await);
+        for _ in 0..100 {
+            slots[0].succeeded();
+        }
+        let mut more = Vec::new();
+        for _ in 0..3 {
+            more.push(scheduler.acquire().await);
+        }
+        // Back to the configured cap.
+        assert!(!has_room(&scheduler).await);
     }
 }

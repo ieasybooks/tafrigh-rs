@@ -163,7 +163,7 @@ Request starts per second for each token.
 .RE
 .TP
 \fB\-\-wit\-concurrency\fR \fI<N>\fR
-Concurrent requests per token [default: enough to keep up with \-\-wit\-rps; Wit answers at about the pace of the audio, so longer chunks need more].
+Most concurrent requests per token; fewer run while Wit or the network seems overloaded [default: enough to keep up with \-\-wit\-rps; Wit answers at about the pace of the audio, so longer chunks need more].
 .TP
 \fB\-\-wit\-attempts\fR \fI<N>\fR
 Attempts per chunk, including the first.

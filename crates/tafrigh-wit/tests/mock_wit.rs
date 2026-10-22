@@ -197,6 +197,65 @@ async fn retry_after_holds_requests_already_waiting() {
     }
 }
 
+/// Answers the first `failures` requests with HTTP 503 at once, and later ones with a
+/// dictation after `delay`; records when the later ones arrive.
+struct OverloadedFirst {
+    failures: usize,
+    delay: Duration,
+    seen: AtomicUsize,
+    arrivals: Arc<Mutex<Vec<std::time::Instant>>>,
+}
+
+impl Respond for OverloadedFirst {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        if self.seen.fetch_add(1, Ordering::SeqCst) < self.failures {
+            return ResponseTemplate::new(503);
+        }
+        self.arrivals
+            .lock()
+            .unwrap()
+            .push(std::time::Instant::now());
+        dictation("ok").set_delay(self.delay)
+    }
+}
+
+#[tokio::test]
+async fn overloads_send_fewer_requests_at_once() {
+    let server = MockServer::start().await;
+    let arrivals = Arc::new(Mutex::new(Vec::new()));
+    let delay = Duration::from_millis(200);
+    Mock::given(method("POST"))
+        .respond_with(OverloadedFirst {
+            failures: 8,
+            delay,
+            seen: AtomicUsize::new(0),
+            arrivals: arrivals.clone(),
+        })
+        .mount(&server)
+        .await;
+    let mut config = config(&server, &["t"]);
+    config.max_in_flight_per_token = 8;
+    let recognizer = WitRecognizer::new(config).await.unwrap();
+    let chunk = chunk(160);
+    // All eight first attempts fail; their retries may use at most half of the eight.
+    let results = futures::future::join_all((0..8).map(|_| recognizer.recognize(&chunk))).await;
+    assert!(results.iter().all(Result::is_ok));
+    let arrivals = arrivals.lock().unwrap();
+    assert_eq!(arrivals.len(), 8);
+    // A request is in flight for at least `delay` after it arrives.
+    let most_at_once = arrivals
+        .iter()
+        .map(|&start| {
+            arrivals
+                .iter()
+                .filter(|&&other| other >= start && other < start + delay)
+                .count()
+        })
+        .max()
+        .unwrap();
+    assert!(most_at_once <= 4, "{most_at_once} requests at once");
+}
+
 fn rate_limit(scope: &str) -> ResponseTemplate {
     ResponseTemplate::new(429).set_body_string(
         serde_json::json!({

@@ -87,6 +87,20 @@ impl WitError {
         }
     }
 
+    /// Whether the failure suggests that Wit or the network is overloaded: timeouts, failed
+    /// connections and server errors. Rate limits are handled separately.
+    pub(crate) fn is_overload(&self) -> bool {
+        match self {
+            Self::Request(_) => true,
+            Self::Status { status, .. } => matches!(status, 408 | 500..=599),
+            Self::Api { code, .. } => {
+                let code = code.to_ascii_lowercase();
+                code.contains("timeout") || code.contains("unavailable")
+            }
+            _ => false,
+        }
+    }
+
     /// Whether Wit refused the request because a rate limit was reached.
     pub(crate) fn is_rate_limited(&self) -> bool {
         match self {
@@ -153,5 +167,21 @@ mod tests {
         );
         assert!(!status(400, r#"{"code": "bad-request"}"#).is_retryable());
         assert!(!status(400, "no-body").is_retryable());
+    }
+
+    #[test]
+    fn classifies_overloads() {
+        for code in [408, 500, 502, 503, 504] {
+            assert!(status(code, "").is_overload(), "HTTP {code}");
+        }
+        let timeout = WitError::Api {
+            code: "timeout".into(),
+            message: "Timeout, please try again later".into(),
+        };
+        assert!(timeout.is_overload());
+        assert!(!status(429, "").is_overload());
+        assert!(!status(400, r#"{"code": "no-body"}"#).is_overload());
+        assert!(!status(400, r#"{"code": "bad-request"}"#).is_overload());
+        assert!(!WitError::InvalidResponse("garbled".into()).is_overload());
     }
 }

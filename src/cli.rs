@@ -336,8 +336,9 @@ pub struct Wit {
     #[usage(long = "wit-rps", value_name = "N", default = "1.0")]
     pub requests_per_second: f64,
 
-    /// Concurrent requests per token [default: enough to keep up with --wit-rps; Wit answers
-    /// at about the pace of the audio, so longer chunks need more].
+    /// Most concurrent requests per token; fewer run while Wit or the network seems overloaded
+    /// [default: enough to keep up with --wit-rps; Wit answers at about the pace of the audio, so
+    /// longer chunks need more].
     #[usage(long = "wit-concurrency", value_name = "N")]
     pub concurrency: Option<usize>,
 

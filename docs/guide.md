@@ -139,7 +139,8 @@ With `--transcriber wit`:
 1. ffmpeg decodes the audio, and [Silero VAD](https://github.com/snakers4/silero-vad) finds the speech in it. ffprobe, normally shipped with ffmpeg, adds progress percentages.
 2. The speech is cut into chunks of up to 15 s by default, padded with silence, and sent to Wit across all tokens.
 3. When Wit returns no words for a stretch of speech, that stretch is sent again on its own (`--resend-gaps`).
-4. The next file starts while the current one waits for its last answers. Transcripts are still written in order.
+4. When requests time out or Wit returns HTTP 408 or a server error, fewer requests are sent at once, so an overloaded network or Wit gets time to recover. Successful requests raise the limit again, up to `--wit-concurrency` per token. Rate limits are handled separately, by waiting as Wit asks.
+5. The next file starts while the current one waits for its last answers. Transcripts are still written in order.
 
 ## Speed and accuracy
 

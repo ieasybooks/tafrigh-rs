@@ -138,6 +138,7 @@ impl ChunkRecognizer for WitRecognizer {
             let slot = self.scheduler.acquire().await;
             let err = match self.request(slot.token(), body.clone(), timeout).await {
                 Ok(utterances) => {
+                    slot.succeeded();
                     return Ok(Recognition {
                         utterances: utterances.into_iter().map(|u| self.normalize(u)).collect(),
                     });
@@ -162,6 +163,16 @@ impl ChunkRecognizer for WitRecognizer {
                     ErrorChain(&err)
                 );
                 continue;
+            }
+            if err.is_overload()
+                && let Some(limit) = slot.overloaded()
+            {
+                tracing::debug!(
+                    "chunk #{}: Wit or the network seems overloaded ({}); sending at most \
+                     {limit} request(s) at once",
+                    chunk.index,
+                    ErrorChain(&err)
+                );
             }
             attempt += 1;
             if !err.is_retryable() || attempt >= self.config.max_attempts {
