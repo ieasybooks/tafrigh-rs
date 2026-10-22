@@ -49,9 +49,20 @@ struct Limit {
     /// Fractional, so that each success can raise it by `1 / value`.
     value: f64,
     max: usize,
-    /// When the limit was last cut. Failures of requests that started by then belong to the
-    /// same overload, so they do not cut it again.
-    last_cut: Option<Instant>,
+    /// Cuts so far. A failed request cuts the limit only if no cut happened since it started
+    /// sending; failures of requests that were already being sent belong to the same overload.
+    cuts: u64,
+}
+
+/// What a booking does once its start time comes.
+enum Start {
+    /// Send now; holds the limit's cut count.
+    Now(u64),
+    /// The token was held after the booking: book again.
+    Held,
+    /// The limit was cut after the booking, and as many requests as it allows are being sent:
+    /// wait for a permit again.
+    Full,
 }
 
 impl Scheduler {
@@ -73,7 +84,7 @@ impl Scheduler {
                 limit: Limit {
                     value: max as f64,
                     max,
-                    last_cut: None,
+                    cuts: 0,
                 },
                 permits: max,
                 owed: 0,
@@ -86,27 +97,35 @@ impl Scheduler {
 
     /// Waits for a token that may start a request now.
     pub async fn acquire(&self) -> Slot<'_> {
-        let permit = self
-            .permits
-            .acquire()
-            .await
-            .expect("semaphore is never closed");
-        let permit = Permit {
-            scheduler: self,
-            permit: Some(permit),
-        };
         loop {
-            let (booking, start) = self.book();
-            tokio::time::sleep_until(start).await;
-            if self.start(&booking, start) {
-                return Slot {
-                    booking,
-                    start,
-                    _permit: permit,
-                };
+            let permit = self
+                .permits
+                .acquire()
+                .await
+                .expect("semaphore is never closed");
+            let permit = Permit {
+                scheduler: self,
+                permit: Some(permit),
+            };
+            loop {
+                let (booking, start) = self.book();
+                tokio::time::sleep_until(start).await;
+                match self.start(&booking, start) {
+                    Start::Now(cuts) => {
+                        return Slot {
+                            booking,
+                            cuts,
+                            _permit: permit,
+                        };
+                    }
+                    // Dropping the booking frees its token capacity; book again.
+                    Start::Held => {}
+                    // The limit was cut while this request waited. Give back the booking and
+                    // the permit, which the cut takes out of use, and queue for a permit again.
+                    // Booking afresh then keeps the request interval on the token.
+                    Start::Full => break,
+                }
             }
-            // The token was held while this request waited. Dropping the booking frees its
-            // capacity; book again.
         }
     }
 
@@ -132,16 +151,20 @@ impl Scheduler {
         (booking, start)
     }
 
-    /// Records that `booking` starts at `start`, unless its token was held after it was booked.
-    fn start(&self, booking: &Booking<'_>, start: Instant) -> bool {
+    /// Records that `booking` starts at `start`, unless its token was held after it was booked
+    /// or the limit is reached.
+    fn start(&self, booking: &Booking<'_>, start: Instant) -> Start {
         let mut state = self.lock();
+        if state.sending >= state.limit.allowed() {
+            return Start::Full;
+        }
         let token = &mut state.tokens[booking.token];
         if token.holds != booking.holds {
-            return false;
+            return Start::Held;
         }
         token.after_started = token.after_started.max(start + self.interval);
         state.sending += 1;
-        true
+        Start::Now(state.limit.cuts)
     }
 
     /// Delays the next request on `token`, e.g. after a `Retry-After` response. Requests
@@ -201,14 +224,14 @@ impl Limit {
         self.value = (self.value + 1.0 / self.value).min(self.max as f64);
     }
 
-    /// Cuts the limit to half the requests being sent, unless the failed request started by
-    /// the last cut. Returns the new limit when it was cut.
-    fn overloaded(&mut self, started: Instant, sending: usize) -> Option<usize> {
-        if self.last_cut.is_some_and(|cut| started <= cut) {
+    /// Cuts the limit to half the requests being sent, unless it was cut since the failed
+    /// request started, when `cuts` cuts had happened. Returns the new limit when it was cut.
+    fn overloaded(&mut self, cuts: u64, sending: usize) -> Option<usize> {
+        if cuts != self.cuts {
             return None;
         }
         self.value = self.value.min((sending as f64 / 2.0).max(1.0));
-        self.last_cut = Some(Instant::now());
+        self.cuts += 1;
         Some(self.allowed())
     }
 }
@@ -248,7 +271,8 @@ impl Drop for Booking<'_> {
 /// A request slot that may start now; releases its token capacity when dropped.
 pub(crate) struct Slot<'a> {
     booking: Booking<'a>,
-    start: Instant,
+    /// The limit's cut count when the request started.
+    cuts: u64,
     _permit: Permit<'a>,
 }
 
@@ -272,7 +296,7 @@ impl Slot<'_> {
         let scheduler = self.booking.scheduler;
         let mut state = scheduler.lock();
         let sending = state.sending;
-        let cut = state.limit.overloaded(self.start, sending);
+        let cut = state.limit.overloaded(self.cuts, sending);
         scheduler.resize(&mut state);
         cut
     }
@@ -429,7 +453,6 @@ mod tests {
         assert_eq!(slots[1].overloaded(), None);
         slots.clear();
 
-        tokio::time::advance(Duration::from_millis(1)).await;
         for _ in 0..4 {
             slots.push(scheduler.acquire().await);
         }
@@ -444,7 +467,6 @@ mod tests {
         assert!(!has_room(&scheduler).await);
         // Never below one request at once.
         drop(b);
-        tokio::time::advance(Duration::from_millis(1)).await;
         let c = scheduler.acquire().await;
         drop(a);
         assert_eq!(c.overloaded(), Some(1));
@@ -477,5 +499,50 @@ mod tests {
         }
         // Back to the configured cap.
         assert!(!has_room(&scheduler).await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cuts_reach_requests_waiting_for_their_start() {
+        let scheduler = Arc::new(Scheduler::new(1, 8, Duration::from_secs(1)));
+        let first = scheduler.acquire().await;
+        // Seven more requests book starts at 1s to 7s, then stay in flight for 30s each.
+        let tasks: Vec<_> = (0..7)
+            .map(|_| {
+                let scheduler = scheduler.clone();
+                tokio::spawn(async move {
+                    let _slot = scheduler.acquire().await;
+                    let sending = scheduler.lock().sending;
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    sending
+                })
+            })
+            .collect();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(first.overloaded(), Some(1));
+        drop(first);
+        let mut most = 0;
+        for task in tasks {
+            most = most.max(task.await.unwrap());
+        }
+        assert_eq!(most, 1, "requests sent at once after the cut");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn requests_that_start_late_after_a_cut_can_cut_again() {
+        let scheduler = Scheduler::new(1, 8, Duration::from_secs(1));
+        let t0 = Instant::now();
+        let mut slots = Vec::new();
+        for _ in 0..4 {
+            slots.push(scheduler.acquire().await);
+        }
+        // Booked for 4s, but not polled again until after the cut at 5s.
+        let mut late = std::pin::pin!(scheduler.acquire());
+        assert!(futures::poll!(&mut late).is_pending());
+        tokio::time::sleep_until(t0 + Duration::from_secs(5)).await;
+        assert_eq!(slots[0].overloaded(), Some(2));
+        slots.clear();
+        tokio::time::advance(Duration::from_millis(1)).await;
+        let late = late.await;
+        assert_eq!(late.overloaded(), Some(1));
     }
 }
