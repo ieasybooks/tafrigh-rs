@@ -258,15 +258,19 @@ impl ChunkRecognizer for CohereRecognizer {
         if chunk.samples.len() < MIN_SAMPLES {
             return Ok(Recognition::default());
         }
-        let (reply, result) = oneshot::channel();
-        self.requests
-            .send(Request {
-                pcm: pcm_f32(&chunk.samples),
-                chunk: (chunk.index, chunk.start, chunk.end),
-                reply,
-            })
+        // Wait for queue capacity before allocating another float PCM buffer.
+        // Concurrent files can otherwise retain prepared buffers outside the queue.
+        let permit = self
+            .requests
+            .reserve()
             .await
             .map_err(|_| CohereError::WorkerStopped)?;
+        let (reply, result) = oneshot::channel();
+        permit.send(Request {
+            pcm: pcm_f32(&chunk.samples),
+            chunk: (chunk.index, chunk.start, chunk.end),
+            reply,
+        });
         Ok(result.await.map_err(|_| CohereError::WorkerStopped)??)
     }
 
@@ -279,7 +283,9 @@ impl ChunkRecognizer for CohereRecognizer {
     }
 
     fn max_in_flight(&self) -> usize {
-        self.batch_size
+        // Keep one batch ready while the session works on the current one.
+        // The bounded request channel still limits queued audio to one batch.
+        2 * self.batch_size
     }
 }
 
@@ -508,6 +514,167 @@ mod tests {
         drop(transcriber);
         let lengths = tokio::time::timeout(Duration::from_secs(10), worker).await;
         assert_eq!(lengths.unwrap().unwrap(), [480_000]);
+    }
+
+    #[tokio::test]
+    async fn prepares_the_next_batch_before_the_current_batch_finishes() {
+        let (mut recognizer, _) = fake_recognizer();
+        recognizer.batch_size = 4;
+        let (sender, mut receiver) = mpsc::channel(4);
+        recognizer.requests = sender;
+        let worker = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            // Hold the first four answers until the next four requests arrive.
+            // With only one batch in flight, this can never finish.
+            for _ in 0..8 {
+                requests.push(receiver.recv().await.unwrap());
+            }
+            for request in requests.into_iter().rev() {
+                request
+                    .reply
+                    .send(Ok(Recognition::text(format!("chunk {}", request.chunk.0))))
+                    .unwrap();
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audio.wav");
+        std::fs::write(&path, chunk(vec![0; 8 * SAMPLE_RATE as usize]).wav_bytes()).unwrap();
+        let options = ChunkOptions {
+            max_chunk: Duration::from_secs(1),
+            merge: false,
+            padding: None,
+            resend_gaps: None,
+            ..ChunkOptions::default()
+        };
+        let windows = FixedWindows::new(Duration::from_secs(1)).unwrap();
+        let transcriber = ChunkedTranscriber::new(windows, recognizer, options).unwrap();
+        let segments = tokio::time::timeout(
+            Duration::from_secs(10),
+            transcriber.transcribe(&path, &NoProgress),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(),
+            (0..8).map(|i| format!("chunk {i}")).collect::<Vec<_>>()
+        );
+        worker.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_request_waiting_for_capacity_does_not_block_the_queue() {
+        let (mut recognizer, _) = fake_recognizer();
+        let (sender, mut receiver) = mpsc::channel(1);
+        recognizer.requests = sender;
+        let audio = chunk(vec![1; MIN_SAMPLES]);
+        let mut first = Box::pin(recognizer.recognize(&audio));
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(std::future::Future::poll(
+                first.as_mut(),
+                cx
+            )))
+            .await
+            .is_pending()
+        );
+        let mut waiting = Box::pin(recognizer.recognize(&audio));
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(std::future::Future::poll(
+                waiting.as_mut(),
+                cx
+            )))
+            .await
+            .is_pending()
+        );
+        drop(waiting);
+        let request = receiver.recv().await.unwrap();
+        request.reply.send(Ok(Recognition::text("first"))).unwrap();
+        assert_eq!(first.await.unwrap(), Recognition::text("first"));
+        let mut next = Box::pin(recognizer.recognize(&audio));
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(std::future::Future::poll(
+                next.as_mut(),
+                cx
+            )))
+            .await
+            .is_pending()
+        );
+        let request = receiver
+            .try_recv()
+            .expect("cancelled waiter must release capacity");
+        request.reply.send(Ok(Recognition::text("next"))).unwrap();
+        assert_eq!(next.await.unwrap(), Recognition::text("next"));
+    }
+
+    #[tokio::test]
+    async fn overlapping_files_keep_their_own_ordered_results() {
+        let (mut recognizer, mut receiver) = fake_recognizer();
+        recognizer.batch_size = 2;
+        let worker = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for _ in 0..8 {
+                requests.push(receiver.recv().await.unwrap());
+            }
+            for request in requests.into_iter().rev() {
+                let label = if request.pcm[0] > 0.0 {
+                    "positive"
+                } else {
+                    "negative"
+                };
+                request
+                    .reply
+                    .send(Ok(Recognition::text(format!(
+                        "{label} {}",
+                        request.chunk.0
+                    ))))
+                    .unwrap();
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let positive = directory.path().join("positive.wav");
+        let negative = directory.path().join("negative.wav");
+        std::fs::write(
+            &positive,
+            chunk(vec![1; 4 * SAMPLE_RATE as usize]).wav_bytes(),
+        )
+        .unwrap();
+        std::fs::write(
+            &negative,
+            chunk(vec![-1; 4 * SAMPLE_RATE as usize]).wav_bytes(),
+        )
+        .unwrap();
+        let options = ChunkOptions {
+            max_chunk: Duration::from_secs(1),
+            merge: false,
+            padding: None,
+            resend_gaps: None,
+            ..ChunkOptions::default()
+        };
+        let transcriber = ChunkedTranscriber::new(
+            FixedWindows::new(Duration::from_secs(1)).unwrap(),
+            recognizer,
+            options,
+        )
+        .unwrap();
+        let results = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(
+                transcriber.transcribe(&positive, &NoProgress),
+                transcriber.transcribe(&negative, &NoProgress)
+            )
+        })
+        .await
+        .unwrap();
+        for (result, label) in [(results.0, "positive"), (results.1, "negative")] {
+            assert_eq!(
+                result
+                    .unwrap()
+                    .iter()
+                    .map(|segment| segment.text.clone())
+                    .collect::<Vec<_>>(),
+                (0..4).map(|i| format!("{label} {i}")).collect::<Vec<_>>()
+            );
+        }
+        worker.await.unwrap();
     }
 
     #[test]
