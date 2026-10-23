@@ -671,6 +671,8 @@ mod tests {
 
     #[tokio::test]
     async fn completed_reply_is_preserved_when_the_worker_exits() {
+        // Covers replies through the first select arm. Preserving a reply delivered between
+        // branch polls is a cross-thread race this current-thread test cannot schedule.
         for success in [true, false] {
             let (recognizer, mut receiver) = fake_recognizer();
             let worker = tokio::spawn(async move {
