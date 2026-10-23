@@ -179,6 +179,7 @@ fn load_session(config: &CohereConfig, path: &Path) -> Result<Session, CohereErr
             &ModelOptions {
                 backend: Backend::Auto,
                 device: Some(gpu),
+                ..ModelOptions::default()
             },
         ) {
             Ok(session) => return Ok(session),
@@ -194,6 +195,7 @@ fn load_session(config: &CohereConfig, path: &Path) -> Result<Session, CohereErr
         &ModelOptions {
             backend: Backend::Cpu,
             device: None,
+            ..ModelOptions::default()
         },
     )
 }

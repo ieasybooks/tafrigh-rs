@@ -1,5 +1,13 @@
 [
   {
+    "name": "Bundled native runtime",
+    "match": ["crates/tafrigh-transcribe/**"],
+    "children": [
+      { "name": "Local patches and build", "match": ["**/native/patches/**", "**/native/prepare.rs", "**/build.rs", "**/tests/**"] },
+      { "name": "Pinned upstream source and bindings", "fallback": true }
+    ]
+  },
+  {
     "name": "Tests",
     "match": ["tests/**", "crates/*/tests/**"],
     "children": [

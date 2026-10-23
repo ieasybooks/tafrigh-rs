@@ -1,22 +1,36 @@
-//! Supply the CUDA link dependencies missing from transcribe-cpp-sys 0.4.0's manifest.
+#[path = "native/prepare.rs"]
+mod prepare;
+#[path = "native/build.rs"]
+mod upstream;
 
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-changed=native/CMakeLists.txt");
+    let package = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    println!("cargo:rerun-if-changed=native");
+    let source = prepare::source(&package.join("native"), &output.join("source"))
+        .expect("verify and prepare the bundled transcribe.cpp source");
+    upstream::build(&source);
+    cuda_libraries(&output);
+}
+
+// The upstream 0.4.1 static link manifest omits CUDA's toolkit dependencies.
+// Keep discovery with the crate that owns the native link, including driver stubs
+// on build hosts without a GPU. Stub paths are never added to runtime search paths.
+fn cuda_libraries(output: &std::path::Path) {
     for variable in ["CMAKE", "CUDAToolkit_ROOT", "CUDA_PATH", "CUDACXX"] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
     if env::var_os("CARGO_FEATURE_CUDA").is_none() {
         return;
     }
-    let directory = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("cuda-link");
+    let directory = output.join("cuda-link");
     let status = Command::new(env::var_os("CMAKE").unwrap_or_else(|| "cmake".into()))
-        // Re-discover libraries when switching toolkits in the same Cargo target directory.
         .args(["-UCUDA_*", "-UCUDAToolkit_*"])
-        .args(["-S", "native", "-B"])
+        .args(["-S", "native/cuda", "-B"])
         .arg(&directory)
         .status()
         .expect("CMake is required to locate the CUDA toolkit libraries");
@@ -25,7 +39,6 @@ fn main() {
     for line in libraries.lines() {
         println!("cargo:rustc-link-search=native={line}");
     }
-    // The Windows SDK names its driver import library cuda.lib (the DLL is nvcuda.dll).
     for library in ["cudart", "cublas", "cublasLt", "cuda"] {
         println!("cargo:rustc-link-lib=dylib={library}");
     }

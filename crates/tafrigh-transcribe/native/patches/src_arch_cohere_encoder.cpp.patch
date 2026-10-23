@@ -1,0 +1,10 @@
+--- a/src/arch/cohere/encoder.cpp
++++ b/src/arch/cohere/encoder.cpp
+@@ -112,6 +112,7 @@
+                                  bool                  use_flash,
+                                  const char *          backend_name) {
+     conf::ConvPolicy policy{};
++    policy.contiguous_glu          = backend_name != nullptr && std::strstr(backend_name, "CUDA") != nullptr;
+     policy.direct_pw               = conf::detect_direct_pw(backend_name);
+     const bool direct_dw           = detect_direct_dw(backend_name);
+     policy.direct_dw_in_block      = direct_dw;

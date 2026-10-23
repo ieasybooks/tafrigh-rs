@@ -34,6 +34,8 @@ jobs:
       # The Cohere CLI is behind a feature; check it too (on the CPU, without a model).
       - run: cargo clippy --package tafrigh-cli --all-targets --features cohere --locked -- -D warnings
       - run: cargo test --package tafrigh-cli --features cohere --locked
+      # The native source and patches must also build from the published package layout.
+      - run: cargo package --package tafrigh-transcribe --locked
       - name: Check generated CLI reference
         run: |
           sh scripts/cli-docs.sh

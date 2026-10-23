@@ -1,0 +1,21 @@
+--- a/src/arch/cohere/model.cpp
++++ b/src/arch/cohere/model.cpp
+@@ -634,12 +634,14 @@
+     // self-KV ceiling only (see cohere_dec_ctx_ceiling).
+     cc->n_ctx     = transcribe_session_params_n_ctx(params);
+ 
+-    // Flash-attention policy — see CohereSession (cohere.h). Encoder
+-    // auto-disables on Metal; decoder defaults on; env overrides apply globally.
++    // CUDA flash kernels do not support the encoder's 160-wide heads or
++    // its per-head relative-position masks. Explicit attention keeps that
++    // work on the GPU instead of copying every layer to the CPU.
+     auto *     cm       = static_cast<CohereModel *>(model);
+     const bool is_metal = (cm->plan.primary_kind == transcribe::BackendKind::Metal);
+-
+-    cc->encoder_use_flash = !is_metal;
++    const bool is_cuda  = (cm->plan.primary_kind == transcribe::BackendKind::Cuda);
++
++    cc->encoder_use_flash = !is_metal && !is_cuda;
+     cc->decoder_use_flash = true;
+ 
+     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
