@@ -11,7 +11,7 @@ keywords.workspace = true
 categories = ["multimedia::audio", "api-bindings"]
 
 [features]
-cuda = ["transcribe-cpp/cuda"]
+cuda = ["tafrigh-transcribe/cuda"]
 
 [dependencies]
 tafrigh = { path = "../tafrigh", version = "0.4.0" }
@@ -22,7 +22,7 @@ sha2 = "0.11.1"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
 tracing.workspace = true
-transcribe-cpp = { package = "tafrigh-transcribe", path = "../tafrigh-transcribe", version = "0.4.0" }
+tafrigh-transcribe = { path = "../tafrigh-transcribe", version = "0.4.0" }
 
 [dev-dependencies]
 anyhow.workspace = true

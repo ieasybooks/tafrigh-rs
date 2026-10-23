@@ -3,4 +3,4 @@ crates/tafrigh-transcribe/src/** linguist-vendored
 crates/tafrigh-transcribe/native/build.rs linguist-vendored
 crates/tafrigh-transcribe/native/*.crate binary linguist-vendored
 # A unified diff represents an empty context line with a single space.
-crates/tafrigh-transcribe/native/patches/*.patch -whitespace
+crates/tafrigh-transcribe/native/patches/*.patch -whitespace text eol=lf

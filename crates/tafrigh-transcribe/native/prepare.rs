@@ -38,7 +38,8 @@ pub fn source(native: &Path, destination: &Path) -> Result<PathBuf> {
     for entry in metadata["patches"].as_array().ok_or("missing patch list")? {
         let path = entry["path"].as_str().ok_or("missing patch target")?;
         let patch =
-            fs::read_to_string(native.join(entry["patch"].as_str().ok_or("missing patch file")?))?;
+            fs::read_to_string(native.join(entry["patch"].as_str().ok_or("missing patch file")?))?
+                .replace("\r\n", "\n");
         fingerprint.update(patch.as_bytes());
         patches.push((path, patch));
     }

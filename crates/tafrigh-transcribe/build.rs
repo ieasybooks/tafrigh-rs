@@ -8,9 +8,18 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=TRANSCRIBE_DIR");
+    assert!(
+        env::var_os("TRANSCRIBE_DIR").is_none(),
+        "tafrigh-transcribe builds its patched source; unset TRANSCRIBE_DIR"
+    );
     let package = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     println!("cargo:rerun-if-changed=native");
+    let metadata: serde_json::Value = serde_json::from_str(include_str!("native/upstream.json"))
+        .expect("parse bundled runtime metadata");
+    let version = metadata["version"].as_str().expect("native ABI version");
+    println!("cargo:rustc-env=TAFRIGH_TRANSCRIBE_VERSION={version}");
     let source = prepare::source(&package.join("native"), &output.join("source"))
         .expect("verify and prepare the bundled transcribe.cpp source");
     upstream::build(&source);

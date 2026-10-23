@@ -8,8 +8,9 @@
   "bindings_archive_sha256": "8bab65d30f5a4c3ea0ab6f38236823389f3914b0605bbc0073a4ec88018c0714",
   "bindings_adaptations": [
     "Combine the safe and raw binding crates, using crate::sys imports.",
-    "Keep the native ABI version at upstream 0.4.1 independently of the tafrigh package version.",
-    "Pass the extracted source directory into the upstream build helper."
+    "Read the native ABI version from this metadata through a build-script environment value, independently of the tafrigh package version.",
+    "Pass the extracted source directory into the upstream build helper; reject TRANSCRIBE_DIR and watch bundled inputs instead of generated source.",
+    "Point Rust documentation at tafrigh-transcribe, combine copyright notices, and link omitted upstream license references to the pinned commit."
   ],
   "patches": [
     {

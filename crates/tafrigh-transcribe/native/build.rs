@@ -7,11 +7,8 @@
 //! No per-platform link lists are hardcoded here (the whisper-rs drift class
 //! this avoids).
 //!
-//! Prebuilt path: setting TRANSCRIBE_DIR (OPENSSL_DIR-style) to an install
-//! prefix produced by `cmake --install` of a TRANSCRIBE_INSTALL=ON build
-//! skips the source build entirely and links against that prefix's manifest
-//! instead. Cargo features are inert there: the prebuilt already decided its
-//! configuration (static/shared, backends), and the manifest records it.
+//! tafrigh always builds its patched source; the outer build script rejects
+//! TRANSCRIBE_DIR and watches the bundled inputs instead of this extracted tree.
 //!
 //! Cargo features map directly to CMake options:
 //!   `shared`           -> TRANSCRIBE_BUILD_SHARED=ON (default: static)
@@ -75,42 +72,6 @@ fn split_cmake_args(s: &str) -> Vec<String> {
 }
 
 pub(super) fn build(root: &Path) {
-    for p in [
-        "CMakeLists.txt",
-        "CMakePresets.json",
-        "include",
-        "src",
-        "ggml",
-        "cmake",
-        "bindings/rust/sys/build.rs",
-        "bindings/rust/sys/src",
-    ] {
-        println!("cargo:rerun-if-changed={}", root.join(p).display());
-    }
-
-    // Prebuilt path: TRANSCRIBE_DIR points at an existing install prefix (a
-    // `cmake --install` tree from a TRANSCRIBE_INSTALL=ON configure). Skip the
-    // source build and emit the link line from that prefix's manifest; the
-    // manifest records the install's own posture (static/shared, backends), so
-    // the Cargo features below never apply here.
-    println!("cargo:rerun-if-env-changed=TRANSCRIBE_DIR");
-    if let Some(dir) = env::var_os("TRANSCRIBE_DIR") {
-        let prefix = PathBuf::from(dir);
-        let manifest = find_manifest(&prefix).unwrap_or_else(|| {
-            panic!(
-                "TRANSCRIBE_DIR is set but no lib/transcribe-link.json (or lib64/) exists \
-                 under {}. It must point at an install prefix of this library, produced by \
-                 `cmake -B build -DTRANSCRIBE_INSTALL=ON && cmake --build build && \
-                 cmake --install build --prefix <dir>`. Unset TRANSCRIBE_DIR to build \
-                 the vendored sources instead.",
-                prefix.display()
-            )
-        });
-        println!("cargo:rerun-if-changed={}", manifest.display());
-        emit_link_lines(&prefix, &manifest);
-        return;
-    }
-
     // `dynamic-backends` (loadable backend modules) requires a shared library,
     // so it implies `shared`. The Cargo manifest already encodes that implication
     // (`dynamic-backends = ["shared"]`), but treat it as load-bearing here too.

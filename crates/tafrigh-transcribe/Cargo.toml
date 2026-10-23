@@ -2,6 +2,7 @@
 name = "tafrigh-transcribe"
 description = "Pinned transcribe.cpp runtime and Rust bindings with tafrigh's Cohere CUDA fixes."
 version = "0.4.0"
+# The copied bindgen output uses edition-2021 extern blocks.
 edition = "2021"
 rust-version.workspace = true
 license.workspace = true

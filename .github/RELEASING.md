@@ -10,6 +10,8 @@ The workflow uses the repository's `GITHUB_TOKEN`; no additional personal token 
 
 The root `Cargo.toml` defines `tafrigh-cli` and lists the five library members explicitly. Each package and internal path dependency declares its version directly. release-please's `rust` strategy updates all six package versions, their internal dependency requirements, and `Cargo.lock` together in the release PR. `.release-please-manifest.json` records the release baseline. CI checks that all package versions match. Publish `tafrigh` and `tafrigh-transcribe` before `tafrigh-wit`, `tafrigh-youtube` and `tafrigh-cohere`, then publish `tafrigh-cli`.
 
+Use each workspace package's actual name as its dependency key, even when its Rust library has a different name. release-please updates path-dependency versions by that key and does not follow Cargo's `package` aliases. CI checks both the keys and version requirements against the workspace packages.
+
 The first publication of a new crate, such as `tafrigh-transcribe`, requires a crates.io API token in `CARGO_REGISTRY_TOKEN` because trusted publishing can only be configured after the crate exists. Configure the new crate's trusted publisher for this repository's `publish.yml` workflow and `release` environment after that first publication.
 
 The workflow explicitly dispatches publishing because a release created with `GITHUB_TOKEN` does not trigger release-event workflows. See [GitHub's workflow trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow) and [release-please's Rust strategy](https://github.com/googleapis/release-please/blob/main/src/strategies/rust.ts).

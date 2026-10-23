@@ -18,7 +18,7 @@ use crate::types::AbiStruct;
 ///
 /// This is the bundled upstream version, independent of the tafrigh package version.
 pub fn compiled_version() -> String {
-    "0.4.1".to_string()
+    env!("TAFRIGH_TRANSCRIBE_VERSION").to_string()
 }
 
 /// The `MAJOR.MINOR.PATCH` version string of the linked native library.

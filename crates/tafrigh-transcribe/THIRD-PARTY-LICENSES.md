@@ -1,5 +1,7 @@
 # Third-party licenses
 
+This notice is reproduced from the pinned upstream release. Relative native-source paths refer to the source archive in `native/`, rather than this crate's root. Links to upstream tooling and documentation omitted from that archive point to the pinned upstream commit.
+
 transcribe.cpp is MIT-licensed (see [`LICENSE`](LICENSE)). It vendors and links
 the third-party components below, each under its own permissive license. The
 authoritative license text for each ships in-tree at the path noted; copies are
@@ -7,7 +9,7 @@ reproduced here for convenience.
 
 | Component | License | Vendored at | Pin |
 |-----------|---------|-------------|-----|
-| ggml      | MIT     | [`ggml/LICENSE`](ggml/LICENSE) | see [`ggml/UPSTREAM`](ggml/UPSTREAM) |
+| ggml      | MIT     | [`ggml/LICENSE`](ggml/LICENSE) | see [`ggml/UPSTREAM`](https://github.com/handy-computer/transcribe.cpp/blob/4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b/ggml/UPSTREAM) |
 | Silero VAD | MIT | [`src/third_party/silero_vad/LICENSE`](src/third_party/silero_vad/LICENSE) | see [`src/third_party/silero_vad/UPSTREAM`](src/third_party/silero_vad/UPSTREAM) |
 | miniz     | MIT     | [`src/third_party/miniz/LICENSE`](src/third_party/miniz/LICENSE) | see [`src/third_party/miniz/UPSTREAM`](src/third_party/miniz/UPSTREAM) |
 
@@ -20,9 +22,9 @@ Fermion Research's Apache-2.0 container reader at
 `FermionResearch/Phonon-2@7e153e4054c0a10db6d47d6fff5c062d4c77c154`.
 Copyright 2026 Fermion Research. Modifications add strict record validation,
 pinned artifact handling and F32 conversion. Its license text is
-[`scripts/lib/phonon-LICENSE-Apache-2.0.txt`](scripts/lib/phonon-LICENSE-Apache-2.0.txt).
+[`scripts/lib/phonon-LICENSE-Apache-2.0.txt`](https://github.com/handy-computer/transcribe.cpp/blob/4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b/scripts/lib/phonon-LICENSE-Apache-2.0.txt).
 It is not linked into native binaries. Model-weight attribution and licenses
-are separate; see [`docs/models/phonon-2.md`](docs/models/phonon-2.md).
+are separate; see [`docs/models/phonon-2.md`](https://github.com/handy-computer/transcribe.cpp/blob/4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b/docs/models/phonon-2.md).
 
 ---
 

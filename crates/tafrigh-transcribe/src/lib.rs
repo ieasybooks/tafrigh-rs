@@ -43,7 +43,7 @@
 //! was built against. The load-time base-version lock (see [`Model::load`]) is
 //! retained.
 
-#![doc(html_root_url = "https://docs.rs/transcribe-cpp")]
+#![doc(html_root_url = "https://docs.rs/tafrigh-transcribe")]
 #![warn(missing_debug_implementations)]
 
 #[path = "sys/lib.rs"]
