@@ -9,7 +9,7 @@ repository.workspace = true
 readme = "README.md"
 keywords.workspace = true
 categories = ["command-line-utilities", "multimedia::audio"]
-include = ["src/**", "docs/**", "Cargo.toml", "README.md", "LICENSE"]
+include = ["src/**", "docs/**", "!docs/benchmarks/**", "Cargo.toml", "README.md", "LICENSE"]
 
 [[bin]]
 name = "tafrigh"

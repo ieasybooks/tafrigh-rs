@@ -60,7 +60,9 @@ Models are kept in `tafrigh/models` in the user cache folder: `$XDG_CACHE_HOME` 
 
 `--device auto`, the default, uses the GPU this build supports when it works, and the CPU otherwise. `--device cpu` forces the CPU, `--device gpu` fails without a GPU, and `--device gpu:N` picks one of several GPUs, counting from 0. A log line at the start shows where the model runs.
 
-One process shares its loaded model across all input files. `--cohere-batch-size` controls the maximum GPU batch (1–64, default 8); a larger batch uses more memory. `--cohere-threads` controls CPU threads for preprocessing and inference (default 0 selects automatically). Audio for the next batch can be prepared while the current batch runs, with a bounded queue. CPU inference still processes one chunk at a time.
+One process shares its loaded model across all input files. `--cohere-batch-size` controls the maximum GPU batch (1–64, default 8); larger batches and longer chunks use more memory. Audio for the next batch can be prepared while the current batch runs, with a bounded queue. CPU inference processes one chunk at a time. The CLI processes at most two files concurrently, so one-chunk files cannot fill batches larger than two; larger batches chiefly help recordings that produce many chunks.
+
+`--threads` controls native inference threads. Omitted or 0 selects automatically: available CPU parallelism minus two on GPU (at least one), or up to eight threads on CPU, capped at the native limit of 512. Available parallelism uses Rust's estimate, including affinity and supported container CPU quotas; if it cannot be determined, the fallback is one. CPU automatic selection now respects that estimate instead of the native runtime's affinity-only count. Explicit CLI values cannot exceed available parallelism or 512. Single-chunk mel preprocessing and other pipeline work use their own threads, so this is not a process-wide thread cap. The startup log shows the actual device, maximum batch size and native inference thread count, including after an automatic fallback to CPU.
 
 | Build | GPU |
 |---|---|
@@ -209,7 +211,20 @@ Times depend on how busy Wit is. These runs sent WAV. With Opus, the default sin
 
 ### Cohere
 
-On an RTX 4070 (12 GiB) and Core i7-14700F, 16 recordings totaling 7.33 audio hours gave these times, including process startup, model loading, FFmpeg decoding, VAD, inference and output writing:
+#### GTX 1660 SUPER review measurements
+
+The [review of the performance stack at `9ffd7f7`](https://github.com/ieasybooks/tafrigh-rs/pull/44#issuecomment-6373249159) reports the following on a GTX 1660 SUPER (6 GiB), Core i5-8500 and CUDA 12.9. It uses the public [69-minute Arabic grammar lecture](https://www.youtube.com/watch?v=Cdle09QLPLI) and the 500-clip, five-source corpus described below, with the CLI defaults including `--pad 0.5`. These are reviewer measurements, not reruns of the revised commit. Lecture times are medians of three passes; clip accuracy is one pass per setting.
+
+| Setting | Lecture, main → stack | WER, main → stack | CER, main → stack |
+|---|---:|---:|---:|
+| Q8_0, batch 8, automatic threads | 259.6 → 156.2 s | 24.43% → 24.40% | 12.60% → 12.60% |
+| Q4_K_M, batch 8, automatic threads | 253.2 → 154.3 s | 24.64% → 24.59% | 12.70% → 12.60% |
+
+Q8_0 took 286.8 → 194.1 seconds for the 500 clips, with lecture GPU use of 2,948 → 3,000 MiB. Paired 95% intervals for WER changes span zero: −0.17 to +0.09 percentage points for Q8_0 and −0.23 to +0.18 for Q4_K_M. The same 12 hard clips were empty in both builds. Batch 8 balanced speed and memory on this GPU; larger batches did not help. These results do not establish accuracy equivalence on every recording.
+
+#### RTX 4070 measurements
+
+On an RTX 4070 (12 GiB) and Core i7-14700F, 16 private recordings totaling 7.33 audio hours gave these times, including process startup, model loading, FFmpeg decoding, VAD, inference and output writing. All runs below use `--pad 0`, rather than the CLI default of 0.5 seconds on each side:
 
 | Build and settings | GPU processes | Seconds per audio hour |
 |---|---:|---:|
@@ -218,13 +233,13 @@ On an RTX 4070 (12 GiB) and Core i7-14700F, 16 recordings totaling 7.33 audio ho
 | Original 0.4.0, BF16, batch 8 per process, automatic CPU threads | 2 | 47.02 |
 | Current BF16, batch 32, 8 CPU threads | 1 | 12.12 |
 
-These are medians of three passes except the original Q8_0 baseline, which is one pass. The BF16 comparison changes process count and tuning as well as the implementation. Downloads and application imports are excluded. See the [benchmark report](benchmarks/cohere-cuda-2026-10-23.md) for the settings, accuracy checks on 428 human-transcribed FLEURS clips, output checks and limits.
+These are medians of three passes except the original Q8_0 baseline, which is one pass. The BF16 comparison changes process count and tuning as well as the implementation. Downloads and application imports are excluded. See the [benchmark report](https://github.com/ieasybooks/tafrigh-rs/blob/main/docs/benchmarks/cohere-cuda-2026-10-23.md) for the settings, accuracy checks on 428 human-transcribed FLEURS clips, reproducible error-count calculations, output checks and limits. Benchmark artifacts are kept in the repository rather than the published CLI crate.
 
 Q8_0, batch 8 and automatic threads remain the defaults. To try the measured BF16 tuning on a GPU with enough memory:
 
 ```sh
 tafrigh recordings/ --transcriber cohere --device gpu --model bf16 \
-  --cohere-batch-size 32 --cohere-threads 8
+  --cohere-batch-size 32 --threads 8
 ```
 
 #### Earlier GTX 1660 SUPER benchmark

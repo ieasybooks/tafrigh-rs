@@ -31,7 +31,7 @@ mod error;
 mod model;
 mod recognizer;
 
-pub use config::{CohereConfig, Device, Language};
+pub use config::{CohereConfig, Device, Language, MAX_BATCH_SIZE, MAX_THREADS};
 pub use error::CohereError;
 pub use model::{
     DownloadProgress, MODEL_REVISION, ModelMetadata, ModelSource, ModelVariant, default_model_dir,

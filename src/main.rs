@@ -115,9 +115,11 @@ async fn start(run: Run, ui: &Ui) -> anyhow::Result<ExitCode> {
             download.finish();
             let recognizer = recognizer.context("setting up Cohere Transcribe Arabic")?;
             tracing::info!(
-                "Cohere Transcribe Arabic: {model} on {} ({})",
+                "Cohere Transcribe Arabic: {model} on {} ({}), max batch {}, native inference threads {}",
                 recognizer.backend(),
-                recognizer.device_name()
+                recognizer.device_name(),
+                recognizer.batch_size(),
+                recognizer.threads()
             );
             let transcriber = ChunkedTranscriber::new(segmenter, recognizer, audio.chunks)?
                 .with_decoder(audio.decoder);

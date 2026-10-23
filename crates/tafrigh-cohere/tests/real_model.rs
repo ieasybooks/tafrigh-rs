@@ -27,6 +27,11 @@ async fn recognizes_short_arabic_clip_when_model_is_configured() {
         Err(CohereError::Config(message)) if message.contains("unavailable")
     ));
     let recognizer = CohereRecognizer::load(config).await.unwrap();
+    assert_eq!(recognizer.threads(), 4);
+    assert_eq!(
+        recognizer.batch_size(),
+        if cfg!(feature = "cuda") { 8 } else { 1 }
+    );
     let backend = recognizer.backend().to_ascii_lowercase();
     assert!(if cfg!(feature = "cuda") {
         backend.starts_with("cuda")

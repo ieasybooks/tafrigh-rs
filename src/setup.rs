@@ -21,7 +21,9 @@ use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
 use tafrigh::segment::{FixedWindows, Segmenter};
 use tafrigh::source::{Input, YtDlp};
 #[cfg(feature = "cohere")]
-use tafrigh_cohere::{CohereConfig, Device, Language, ModelSource, ModelVariant};
+use tafrigh_cohere::{
+    CohereConfig, Device, Language, MAX_BATCH_SIZE, MAX_THREADS, ModelSource, ModelVariant,
+};
 use tafrigh_wit::{AudioFormat, Endpoint, WitConfig};
 use tafrigh_youtube::YoutubeCaptions;
 use usage_rs::{Event, Parser, ValidationError};
@@ -140,7 +142,7 @@ fn check_backend_options(transcriber: Transcriber, typed: &Typed) -> Result<(), 
                 "--device",
                 "--model-dir",
                 "--cohere-batch-size",
-                "--cohere-threads",
+                "--threads",
             ],
         ),
         Transcriber::Cohere => (
@@ -189,7 +191,7 @@ fn check_backend_options(transcriber: Transcriber, typed: &Typed) -> Result<(), 
                 "--device",
                 "--model-dir",
                 "--cohere-batch-size",
-                "--cohere-threads",
+                "--threads",
             ],
         ),
     };
@@ -408,15 +410,24 @@ impl CohereRun {
             })?,
         };
         let models = &args.models;
-        if !(1..=64).contains(&models.cohere_batch_size) {
+        if let Some(size) = models.cohere_batch_size
+            && !(1..=MAX_BATCH_SIZE).contains(&size)
+        {
             return Err(ValidationError::field("--cohere-batch-size")
-                .value(models.cohere_batch_size.to_string())
-                .reason("must be between 1 and 64"));
+                .value(size.to_string())
+                .reason(format!("must be between 1 and {MAX_BATCH_SIZE}")));
         }
-        if models.cohere_threads > i32::MAX as usize {
-            return Err(ValidationError::field("--cohere-threads")
-                .value(models.cohere_threads.to_string())
-                .reason("must fit in a signed 32-bit integer"));
+        let max_threads = std::thread::available_parallelism()
+            .map_or(1, std::num::NonZero::get)
+            .min(MAX_THREADS);
+        if let Some(threads) = models.threads
+            && threads > max_threads
+        {
+            return Err(ValidationError::field("--threads")
+                .value(threads.to_string())
+                .reason(format!(
+                    "must be 0 (automatic) or at most {max_threads}, limited by available CPU parallelism and the native limit"
+                )));
         }
         let device: Device = models.device.parse().map_err(|_| {
             ValidationError::field("--device")
@@ -439,8 +450,12 @@ impl CohereRun {
         cohere.model_dir.clone_from(&models.model_dir);
         cohere.language = language;
         cohere.device = device;
-        cohere.batch_size = models.cohere_batch_size;
-        cohere.threads = models.cohere_threads;
+        if let Some(size) = models.cohere_batch_size {
+            cohere.batch_size = size;
+        }
+        if let Some(threads) = models.threads {
+            cohere.threads = threads;
+        }
         Ok(Self { audio, cohere })
     }
 }
@@ -762,8 +777,8 @@ mod tests {
             "cohere",
             "--cohere-batch-size",
             "24",
-            "--cohere-threads",
-            "4",
+            "--threads",
+            "1",
         ]
         .into_iter()
         .map(std::ffi::OsStr::new)
@@ -775,7 +790,28 @@ mod tests {
             panic!("expected Cohere");
         };
         assert_eq!(run.cohere.batch_size, 24);
-        assert_eq!(run.cohere.threads, 4);
+        assert_eq!(run.cohere.threads, 1);
+    }
+
+    #[cfg(feature = "cohere")]
+    #[test]
+    fn omitted_cohere_knobs_preserve_library_defaults_and_zero_is_automatic() {
+        for flags in [vec![], vec!["--threads", "0"]] {
+            let argv: Vec<_> = [vec!["tafrigh", "x.mp3", "--transcriber", "cohere"], flags]
+                .concat()
+                .into_iter()
+                .map(std::ffi::OsStr::new)
+                .collect();
+            let Ok(super::Plan::Transcribe(run)) = super::Plan::parse_from(&argv) else {
+                panic!("expected a transcription run");
+            };
+            let super::Backend::Cohere(run) = run.backend else {
+                panic!("expected Cohere");
+            };
+            let defaults = tafrigh_cohere::CohereConfig::default();
+            assert_eq!(run.cohere.batch_size, defaults.batch_size);
+            assert_eq!(run.cohere.threads, defaults.threads);
+        }
     }
 
     #[test]

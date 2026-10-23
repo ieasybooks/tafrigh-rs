@@ -5,6 +5,11 @@ use std::time::Duration;
 
 use crate::{CohereError, ModelSource};
 
+/// Largest supported GPU batch.
+pub const MAX_BATCH_SIZE: usize = 64;
+/// Native ggml thread-mask capacity; session thread counts must not exceed this.
+pub const MAX_THREADS: usize = 512;
+
 /// The model's two supported language hints.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Language {
@@ -107,9 +112,11 @@ pub struct CohereConfig {
     pub batch_size: usize,
     /// Maximum time to collect a partial GPU batch; 10 ms by default.
     pub batch_wait: Duration,
-    /// CPU threads used by transcribe.cpp. 0, the default, picks them: every core but two
-    /// when the model runs on a GPU, leaving room for decoding and voice detection, and every
-    /// core on the CPU.
+    /// Native inference threads, at most [`MAX_THREADS`]. 0, the default, uses available CPU
+    /// parallelism minus two on a GPU (at least one), or at most eight threads on CPU.
+    /// Automatic counts respect [`std::thread::available_parallelism`] and the native limit.
+    /// This is not a limit on all process threads; single-chunk mel preprocessing selects
+    /// its own native thread count.
     pub threads: usize,
 }
 
@@ -137,15 +144,15 @@ impl CohereConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<(), CohereError> {
-        if self.batch_size == 0 || self.batch_size > 64 {
-            return Err(CohereError::Config(
-                "batch_size must be between 1 and 64".into(),
-            ));
+        if self.batch_size == 0 || self.batch_size > MAX_BATCH_SIZE {
+            return Err(CohereError::Config(format!(
+                "batch_size must be between 1 and {MAX_BATCH_SIZE}"
+            )));
         }
-        if self.threads > i32::MAX as usize {
-            return Err(CohereError::Config(
-                "threads must fit in a signed 32-bit integer".into(),
-            ));
+        if self.threads > MAX_THREADS {
+            return Err(CohereError::Config(format!(
+                "threads must not exceed {MAX_THREADS}"
+            )));
         }
         if self.batch_wait > Duration::from_secs(1) {
             return Err(CohereError::Config(
@@ -194,6 +201,20 @@ mod tests {
         assert!(config.validate().is_err());
         config.threads = 0;
         config.model = "model.bin".into();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_batch_and_thread_boundaries() {
+        let mut config = CohereConfig::default();
+        for batch_size in [1, MAX_BATCH_SIZE] {
+            config.batch_size = batch_size;
+            for threads in [0, 1, MAX_THREADS] {
+                config.threads = threads;
+                config.validate().unwrap();
+            }
+        }
+        config.threads = MAX_THREADS + 1;
         assert!(config.validate().is_err());
     }
 }

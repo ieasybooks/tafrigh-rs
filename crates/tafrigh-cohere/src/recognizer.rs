@@ -10,7 +10,7 @@ use transcribe_cpp::{
     Backend, DeviceType, Model, ModelOptions, RunOptions, Session, SessionOptions,
 };
 
-use crate::{CohereConfig, CohereError, Device, DownloadProgress};
+use crate::{CohereConfig, CohereError, Device, DownloadProgress, MAX_THREADS};
 
 /// One sample at 16 kHz, in nanoseconds.
 const SAMPLE_NANOS: u64 = 1_000_000_000 / SAMPLE_RATE as u64;
@@ -34,6 +34,7 @@ pub struct CohereRecognizer {
     /// `max_audio_duration` in samples, so chunks are checked exactly.
     max_samples: usize,
     batch_size: usize,
+    threads: usize,
     requests: mpsc::Sender<Request>,
 }
 
@@ -66,7 +67,8 @@ impl CohereRecognizer {
             .resolve(config.model_dir.as_deref(), &progress)
             .await?;
         let settings = config.clone();
-        let session = tokio::task::spawn_blocking(move || load_session(&settings, &path)).await??;
+        let (session, threads) =
+            tokio::task::spawn_blocking(move || load_session(&settings, &path)).await??;
         let model = session.model();
         let backend = model.backend();
         let device_name = model.device()?.description;
@@ -91,6 +93,7 @@ impl CohereRecognizer {
             device = %device_name,
             ?limits,
             batch_size,
+            threads,
             "opened Cohere session"
         );
         let (requests, receiver) = mpsc::channel(batch_size);
@@ -114,6 +117,7 @@ impl CohereRecognizer {
             max_audio_duration,
             max_samples: samples_in(max_audio_duration),
             batch_size,
+            threads,
             requests,
         })
     }
@@ -132,13 +136,24 @@ impl CohereRecognizer {
     pub fn device_name(&self) -> &str {
         &self.device_name
     }
+
+    /// Actual maximum batch size after device selection: always one on CPU.
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+
+    /// Positive native inference thread count after automatic selection, if requested.
+    /// Other process work, including single-chunk mel preprocessing, has its own threads.
+    pub fn threads(&self) -> usize {
+        self.threads
+    }
 }
 
 fn is_gpu(device: &transcribe_cpp::Device) -> bool {
     matches!(device.device_type, DeviceType::Gpu | DeviceType::Igpu)
 }
 
-fn load_session(config: &CohereConfig, path: &Path) -> Result<Session, CohereError> {
+fn load_session(config: &CohereConfig, path: &Path) -> Result<(Session, usize), CohereError> {
     // Validate the file before initializing native backends or allocating weights.
     if !std::fs::metadata(path)?.is_file() {
         return Err(CohereError::Config(
@@ -204,7 +219,7 @@ fn open_session(
     config: &CohereConfig,
     path: &Path,
     options: &ModelOptions,
-) -> Result<Session, CohereError> {
+) -> Result<(Session, usize), CohereError> {
     let model = Model::load_with(path, options)?;
     if model.arch() != "cohere_asr" {
         return Err(CohereError::Config(format!(
@@ -228,21 +243,27 @@ fn open_session(
             config.language
         )));
     }
-    let threads = match config.threads {
-        0 if options.device.is_some() => gpu_threads(),
-        threads => threads,
+    let threads = if config.threads == 0 {
+        let available = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        automatic_threads(is_gpu(&model.device()?), available)
+    } else {
+        config.threads
     };
-    Ok(model.session_with(&SessionOptions {
+    let session = model.session_with(&SessionOptions {
         n_threads: threads as i32,
         ..SessionOptions::default()
-    })?)
+    })?;
+    Ok((session, threads))
 }
 
-/// CPU threads for a model on a GPU: every core but two. Decoding and Silero VAD run alongside
-/// the model; on a 6-core machine, transcribe.cpp's default of every core was about 15% slower
-/// than four threads.
-fn gpu_threads() -> usize {
-    std::thread::available_parallelism().map_or(1, |cores| cores.get().saturating_sub(2).max(1))
+/// Leave room for decoding and VAD on GPU. On CPU, preserve the native eight-thread ceiling
+/// while using Rust's quota-aware available parallelism instead of native affinity alone.
+fn automatic_threads(gpu: bool, available: usize) -> usize {
+    if gpu {
+        available.saturating_sub(2).clamp(1, MAX_THREADS)
+    } else {
+        available.clamp(1, 8)
+    }
 }
 
 #[async_trait]
@@ -460,6 +481,7 @@ mod tests {
             max_audio_duration: MAX_AUDIO_DURATION,
             max_samples: samples_in(MAX_AUDIO_DURATION),
             batch_size: 1,
+            threads: 1,
             requests,
         };
         (recognizer, receiver)
@@ -472,6 +494,22 @@ mod tests {
             end: 0.0,
             lead_in: 0.0,
             samples,
+        }
+    }
+
+    #[test]
+    fn automatic_threads_respect_available_cpus_and_native_limits() {
+        for (available, cpu, gpu) in [
+            (1, 1, 1),
+            (2, 2, 1),
+            (6, 6, 4),
+            (28, 8, 26),
+            (512, 8, 510),
+            (515, 8, 512),
+            (1024, 8, 512),
+        ] {
+            assert_eq!(automatic_threads(false, available), cpu);
+            assert_eq!(automatic_threads(true, available), gpu);
         }
     }
 
