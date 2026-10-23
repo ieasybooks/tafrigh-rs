@@ -265,13 +265,23 @@ impl ChunkRecognizer for CohereRecognizer {
             .reserve()
             .await
             .map_err(|_| CohereError::WorkerStopped)?;
-        let (reply, result) = oneshot::channel();
+        let (reply, mut result) = oneshot::channel();
         permit.send(Request {
             pcm: pcm_f32(&chunk.samples),
             chunk: (chunk.index, chunk.start, chunk.end),
             reply,
         });
-        Ok(result.await.map_err(|_| CohereError::WorkerStopped)??)
+        // A reserved permit can enqueue after the worker has dropped its receiver.
+        // In that case the queued reply sender stays alive, but nobody can answer it.
+        let answer = tokio::select! {
+            biased;
+            answer = &mut result => answer.map_err(|_| CohereError::WorkerStopped)?,
+            () = self.requests.closed() => {
+                // A reply may arrive between polling `result` and observing closure.
+                result.try_recv().map_err(|_| CohereError::WorkerStopped)?
+            }
+        };
+        Ok(answer?)
     }
 
     fn word_timings(&self) -> bool {
@@ -284,7 +294,8 @@ impl ChunkRecognizer for CohereRecognizer {
 
     fn max_in_flight(&self) -> usize {
         // Keep one batch ready while the session works on the current one.
-        // The bounded request channel still limits queued audio to one batch.
+        // Reserving before conversion bounds request float PCM to two batches across all files.
+        // Each file also retains its in-flight i16 chunks and the core's producer queue.
         2 * self.batch_size
     }
 }
@@ -295,6 +306,8 @@ fn samples_in(duration: Duration) -> usize {
 }
 
 fn pcm_f32(samples: &[i16]) -> Vec<f32> {
+    #[cfg(test)]
+    tests::converting_pcm();
     samples
         .iter()
         .map(|&sample| f32::from(sample) / 32768.0)
@@ -415,10 +428,25 @@ async fn worker(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+
     use tafrigh::segment::FixedWindows;
     use tafrigh::{ChunkOptions, ChunkedTranscriber, NoProgress, Transcriber};
 
     use super::*;
+
+    thread_local! {
+        static PCM_CONVERSIONS: Cell<usize> = const { Cell::new(0) };
+        static ON_PCM_CONVERSION: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn converting_pcm() {
+        PCM_CONVERSIONS.set(PCM_CONVERSIONS.get() + 1);
+        let hook = ON_PCM_CONVERSION.with_borrow_mut(Option::take);
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 
     /// A recognizer whose requests arrive on the returned receiver instead of a model.
     fn fake_recognizer() -> (CohereRecognizer, mpsc::Receiver<Request>) {
@@ -604,6 +632,68 @@ mod tests {
             .expect("cancelled waiter must release capacity");
         request.reply.send(Ok(Recognition::text("next"))).unwrap();
         assert_eq!(next.await.unwrap(), Recognition::text("next"));
+    }
+
+    #[tokio::test]
+    async fn callers_wait_for_queue_capacity_before_converting_pcm() {
+        PCM_CONVERSIONS.set(0);
+        let (mut recognizer, _) = fake_recognizer();
+        let (sender, _receiver) = mpsc::channel(1);
+        recognizer.requests = sender;
+        let audio = chunk(vec![1; MIN_SAMPLES]);
+        let mut queued = Box::pin(recognizer.recognize(&audio));
+        let mut waiting = Box::pin(recognizer.recognize(&audio));
+        for future in [&mut queued, &mut waiting] {
+            let poll = std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(std::future::Future::poll(future.as_mut(), cx))
+            })
+            .await;
+            assert!(poll.is_pending());
+        }
+        assert_eq!(PCM_CONVERSIONS.get(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn worker_stopping_during_pcm_conversion_does_not_hang() {
+        let (recognizer, receiver) = fake_recognizer();
+        ON_PCM_CONVERSION.set(Some(Box::new(move || drop(receiver))));
+        let audio = chunk(vec![1; MIN_SAMPLES]);
+        let error = tokio::time::timeout(Duration::from_secs(1), recognizer.recognize(&audio))
+            .await
+            .expect("a stopped worker must not leave its caller waiting")
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<CohereError>(),
+            Some(CohereError::WorkerStopped)
+        ));
+        assert!(recognizer.requests.is_closed());
+    }
+
+    #[tokio::test]
+    async fn completed_reply_is_preserved_when_the_worker_exits() {
+        for success in [true, false] {
+            let (recognizer, mut receiver) = fake_recognizer();
+            let worker = tokio::spawn(async move {
+                let request = receiver.recv().await.unwrap();
+                let answer = if success {
+                    Ok(Recognition::text("completed"))
+                } else {
+                    Err(CohereError::Config("inference failed".into()))
+                };
+                request.reply.send(answer).unwrap();
+                drop(receiver);
+            });
+            let answer = recognizer.recognize(&chunk(vec![1; MIN_SAMPLES])).await;
+            if success {
+                assert_eq!(answer.unwrap(), Recognition::text("completed"));
+            } else {
+                assert!(matches!(
+                    answer.unwrap_err().downcast_ref::<CohereError>(),
+                    Some(CohereError::Config(message)) if message == "inference failed"
+                ));
+            }
+            worker.await.unwrap();
+        }
     }
 
     #[tokio::test]

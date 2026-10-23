@@ -20,7 +20,7 @@ dirs = "7.0.0"
 reqwest.workspace = true
 sha2 = "0.11.1"
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
 tracing.workspace = true
 transcribe-cpp = "0.4.0"
 
