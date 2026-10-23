@@ -133,7 +133,16 @@ fn typed_options<'v>(argv: &[&'v OsStr]) -> Result<Typed, usage_rs::Error<'stati
 /// Fails when an option typed on the command line isn't used by `transcriber`.
 fn check_backend_options(transcriber: Transcriber, typed: &Typed) -> Result<(), ValidationError> {
     let (backend, unused): (&str, &[&'static str]) = match transcriber {
-        Transcriber::Wit => ("wit", &["--model", "--device", "--model-dir"]),
+        Transcriber::Wit => (
+            "wit",
+            &[
+                "--model",
+                "--device",
+                "--model-dir",
+                "--cohere-batch-size",
+                "--cohere-threads",
+            ],
+        ),
         Transcriber::Cohere => (
             "cohere",
             &[
@@ -179,6 +188,8 @@ fn check_backend_options(transcriber: Transcriber, typed: &Typed) -> Result<(), 
                 "--model",
                 "--device",
                 "--model-dir",
+                "--cohere-batch-size",
+                "--cohere-threads",
             ],
         ),
     };
@@ -397,6 +408,16 @@ impl CohereRun {
             })?,
         };
         let models = &args.models;
+        if !(1..=64).contains(&models.cohere_batch_size) {
+            return Err(ValidationError::field("--cohere-batch-size")
+                .value(models.cohere_batch_size.to_string())
+                .reason("must be between 1 and 64"));
+        }
+        if models.cohere_threads > i32::MAX as usize {
+            return Err(ValidationError::field("--cohere-threads")
+                .value(models.cohere_threads.to_string())
+                .reason("must fit in a signed 32-bit integer"));
+        }
         let device: Device = models.device.parse().map_err(|_| {
             ValidationError::field("--device")
                 .value(&models.device)
@@ -418,6 +439,8 @@ impl CohereRun {
         cohere.model_dir.clone_from(&models.model_dir);
         cohere.language = language;
         cohere.device = device;
+        cohere.batch_size = models.cohere_batch_size;
+        cohere.threads = models.cohere_threads;
         Ok(Self { audio, cohere })
     }
 }
@@ -727,6 +750,32 @@ mod tests {
             chunking(&[&cohere[..], &["--no-merge", "--max-chunk", "15"]].concat()),
             (Duration::from_secs(15), false)
         );
+    }
+
+    #[cfg(feature = "cohere")]
+    #[test]
+    fn cohere_batch_and_thread_options_reach_the_recognizer() {
+        let argv: Vec<_> = [
+            "tafrigh",
+            "x.mp3",
+            "--transcriber",
+            "cohere",
+            "--cohere-batch-size",
+            "24",
+            "--cohere-threads",
+            "4",
+        ]
+        .into_iter()
+        .map(std::ffi::OsStr::new)
+        .collect();
+        let Ok(super::Plan::Transcribe(run)) = super::Plan::parse_from(&argv) else {
+            panic!("expected a transcription run");
+        };
+        let super::Backend::Cohere(run) = run.backend else {
+            panic!("expected Cohere");
+        };
+        assert_eq!(run.cohere.batch_size, 24);
+        assert_eq!(run.cohere.threads, 4);
     }
 
     #[test]

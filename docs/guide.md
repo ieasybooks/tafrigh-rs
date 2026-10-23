@@ -60,6 +60,8 @@ Models are kept in `tafrigh/models` in the user cache folder: `$XDG_CACHE_HOME` 
 
 `--device auto`, the default, uses the GPU this build supports when it works, and the CPU otherwise. `--device cpu` forces the CPU, `--device gpu` fails without a GPU, and `--device gpu:N` picks one of several GPUs, counting from 0. A log line at the start shows where the model runs.
 
+One process shares its loaded model across all input files. `--cohere-batch-size` controls the maximum GPU batch (1–64, default 8); a larger batch uses more memory. `--cohere-threads` controls CPU threads for preprocessing and inference (default 0 selects automatically). Audio for the next batch can be prepared while the current batch runs, with a bounded queue. CPU inference still processes one chunk at a time.
+
 | Build | GPU |
 |---|---|
 | macOS arm64 archive | Metal |
@@ -207,7 +209,27 @@ Times depend on how busy Wit is. These runs sent WAV. With Opus, the default sin
 
 ### Cohere
 
-Measured on a GeForce GTX 1660 SUPER (6 GB) with a 6-core Intel Core i5-8500, against [cohere-transcribe](https://github.com/AliOsm/cohere-transcribe) 0.1.4, a Python package for the same model. The lecture is the 69-minute [Arabic grammar lecture](https://www.youtube.com/watch?v=Cdle09QLPLI) from cohere-transcribe's own benchmarks. Errors are measured on 500 Arabic clips (79 min), 100 each from FLEURS, Common Voice 18, SADA22, Casablanca and a Quran recitation corpus, with the text normalization from cohere-transcribe's benchmarks. Lecture times are medians of three fresh runs, including start-up and model loading; tafrigh's 500-clip times are single runs.
+On an RTX 4070 (12 GiB) and Core i7-14700F, 16 recordings totaling 7.33 audio hours gave these times, including process startup, model loading, FFmpeg decoding, VAD, inference and output writing:
+
+| Build and settings | GPU processes | Seconds per audio hour |
+|---|---:|---:|
+| Original 0.4.0, Q8_0, batch 8, automatic CPU threads | 1 | 58.00 |
+| Current Q8_0, batch 8, automatic CPU threads | 1 | 13.52 |
+| Original 0.4.0, BF16, batch 8 per process, automatic CPU threads | 2 | 47.02 |
+| Current BF16, batch 32, 8 CPU threads | 1 | 12.12 |
+
+These are medians of three passes except the original Q8_0 baseline, which is one pass. The BF16 comparison changes process count and tuning as well as the implementation. Downloads and application imports are excluded. See the [benchmark report](benchmarks/cohere-cuda-2026-10-23.md) for the settings, accuracy checks on 428 human-transcribed FLEURS clips, output checks and limits.
+
+Q8_0, batch 8 and automatic threads remain the defaults. To try the measured BF16 tuning on a GPU with enough memory:
+
+```sh
+tafrigh recordings/ --transcriber cohere --device gpu --model bf16 \
+  --cohere-batch-size 32 --cohere-threads 8
+```
+
+#### Earlier GTX 1660 SUPER benchmark
+
+The following measurements predate the CUDA fixes above and use a different corpus. They were made on a GeForce GTX 1660 SUPER (6 GB) with a 6-core Intel Core i5-8500, against [cohere-transcribe](https://github.com/AliOsm/cohere-transcribe) 0.1.4, a Python package for the same model. The lecture is the 69-minute [Arabic grammar lecture](https://www.youtube.com/watch?v=Cdle09QLPLI) from cohere-transcribe's own benchmarks. Errors are measured on 500 Arabic clips (79 min), 100 each from FLEURS, Common Voice 18, SADA22, Casablanca and a Quran recitation corpus, with the text normalization from cohere-transcribe's benchmarks. Lecture times are medians of three fresh runs, including start-up and model loading; tafrigh's 500-clip times are single runs.
 
 | | Lecture | 500 clips | Word errors | Character errors | GPU memory |
 |---|---|---|---|---|---|

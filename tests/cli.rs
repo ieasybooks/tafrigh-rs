@@ -416,12 +416,18 @@ fn unknown_options_are_rejected_for_both_backends() {
 #[test]
 fn local_model_options_are_rejected_by_wit_and_youtube() {
     for (transcriber, required) in [("wit", ["-w", "test"]), ("youtube", ["-l", "ar"])] {
-        for option in ["--model", "--device", "--model-dir"] {
+        for (option, value) in [
+            ("--model", "x"),
+            ("--device", "x"),
+            ("--model-dir", "x"),
+            ("--cohere-batch-size", "16"),
+            ("--cohere-threads", "4"),
+        ] {
             let output = command()
                 .env("PATH", "")
                 .args(["https://youtu.be/video", "--transcriber", transcriber])
                 .args(required)
-                .args([option, "x"])
+                .args([option, value])
                 .output()
                 .unwrap();
             assert_eq!(
@@ -489,6 +495,15 @@ fn cohere_rejects_unusable_options_before_loading_a_model() {
         ),
         (vec!["--device", "tpu"], "expected auto, cpu, gpu or gpu:N"),
         (vec!["--device", "gpu:"], "expected auto, cpu, gpu or gpu:N"),
+        (vec!["--cohere-batch-size", "0"], "must be between 1 and 64"),
+        (
+            vec!["--cohere-batch-size", "65"],
+            "must be between 1 and 64",
+        ),
+        (
+            vec!["--cohere-threads", "2147483648"],
+            "must fit in a signed 32-bit integer",
+        ),
         (
             vec!["--model", "missing.gguf"],
             "expected a variant (bf16, f16, q8_0, q6_k, q5_k_m, q4_k_m) or an existing .gguf file",
@@ -537,6 +552,10 @@ fn cohere_accepts_its_options_and_checks_ffmpeg_before_loading_a_model() {
         "cpu",
         "--model-dir",
         model_dir.path().to_str().unwrap(),
+        "--cohere-batch-size",
+        "24",
+        "--cohere-threads",
+        "4",
         "-l",
         "en",
         "--merge",

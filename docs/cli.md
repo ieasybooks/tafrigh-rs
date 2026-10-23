@@ -146,6 +146,12 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
 - **`--device <DEVICE>`** — Where the model runs: auto (this build's GPU when it works, otherwise the CPU), cpu, gpu (fail without one), or gpu:N for the Nth GPU, counting from 0.
 
   **Default:** `auto`
+- **`--cohere-batch-size <N>`** — Maximum chunks in a Cohere GPU batch (1–64). CPU processes one at a time.
+
+  **Default:** `8`
+- **`--cohere-threads <N>`** — CPU threads for Cohere preprocessing and inference. 0 selects automatically.
+
+  **Default:** `0`
 - **`--model-dir <DIR>`** — Where downloaded models are kept [default: tafrigh/models in the user cache folder, such as ~/.cache/tafrigh/models on Linux or ~/Library/Caches/tafrigh/models on macOS].
 
 ### Downloads and tools
