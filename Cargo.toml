@@ -9,7 +9,7 @@ repository.workspace = true
 readme = "README.md"
 keywords.workspace = true
 categories = ["command-line-utilities", "multimedia::audio"]
-include = ["src/**", "docs/**", "Cargo.toml", "README.md", "LICENSE"]
+include = ["src/**", "docs/**", "!docs/benchmarks/**", "Cargo.toml", "README.md", "LICENSE"]
 
 [[bin]]
 name = "tafrigh"
@@ -46,8 +46,8 @@ workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere"]
-default-members = [".", "crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere"]
+members = ["crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere", "crates/tafrigh-transcribe"]
+default-members = [".", "crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere", "crates/tafrigh-transcribe"]
 
 [workspace.package]
 edition = "2024"

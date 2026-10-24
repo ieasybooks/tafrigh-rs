@@ -1,0 +1,1027 @@
+{
+  "date": "2026-10-23",
+  "hardware": {
+    "gpu": "NVIDIA RTX 4070, 12 GiB",
+    "cpu": "Intel Core i7-14700F",
+    "ram_gib": 30
+  },
+  "model": {
+    "id": "CohereLabs/cohere-transcribe-arabic-07-2026",
+    "revision": "0a8193caa4f3f92131471ab08824e488141cb392",
+    "gguf_revision": "11a54d6895f94cce78d0ece142b8e552e7822539",
+    "bf16_sha256": "4eade55ddc6ef7d9d1caeee0fa412d161212910c30ee2aa82d95725e0dfdf0a2",
+    "q8_0_sha256": "910de5c9c57f9fd8a280e1701f9cd96f63768878c1ca9e4ecf23638a5e0fef16"
+  },
+  "runtime": {
+    "native_version": "0.4.1",
+    "native_commit": "4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b",
+    "install": "cargo install --path . --locked --features cuda, fresh target directory, no TRANSCRIBE_DIR",
+    "cuda": "13.4.92, architecture 89",
+    "rust": "1.99.1",
+    "native_cmake_args": "-DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=89",
+    "binary_sha256": "00d0cc0ffdf5981d0ef40c68a24dcbebc0dfa5e23f47e2e6a53af8527072c2b7"
+  },
+  "timing_corpus": {
+    "recordings": 16,
+    "audio_seconds": 26378.247,
+    "availability": "Local recordings are not distributed. No private paths, identifiers or transcripts are included here."
+  },
+  "accuracy_corpus": {
+    "dataset": "google/fleurs",
+    "configuration": "ar_eg",
+    "split": "test",
+    "revision": "70bb2e84b976b7e960aa89f1c648e09c59f894dd",
+    "license": "CC BY 4.0",
+    "url": "https://huggingface.co/datasets/google/fleurs",
+    "archive_sha256": "787dc348725c0924ff58c8e379d4ef41a7e488dc2ab2990a0eba4a063856edb1",
+    "audio_seconds": 4685.4670625
+  },
+  "accuracy_recordings": 428,
+  "unique_reference_sentences": 283,
+  "normalized_reference_words": 8008,
+  "timing_boundary": "Wall time from fresh CLI startup through exit, including model load, FFmpeg decoding, VAD, inference and SRT/TXT writing. Excludes downloads, cooldown and application imports.",
+  "common_settings": "Arabic; Silero threshold 0.5, min speech 500 ms, min silence 300 ms, speech padding 250 ms; merge; max chunk 30 seconds; explicit --pad 0 (CLI default is 0.5 seconds on each side); min words 1; abort on chunk error.",
+  "defaults": "Q8_0 model, batch size 8 and automatic CPU threads; one shared GPU process. Model, batch and thread flags are omitted to exercise their defaults. Other common settings above are explicit.",
+  "tuned": "BF16, batch size 32 and 8 CPU threads; one shared GPU process.",
+  "normalization": "NFKC, lowercase, remove Arabic diacritics/tatweel, replace punctuation/symbols with spaces, normalize decimal digits; primary score also folds Alef variants to Alef and Alef Maqsura to Yaa. CER excludes whitespace. Taa Marbuta is preserved.",
+  "timings": {
+    "stack-original-q8_0-defaults-production-silero": {
+      "median_seconds_per_audio_hour": 58.00390131528107,
+      "range_seconds_per_audio_hour": [
+        58.00390131528107,
+        58.00390131528107
+      ],
+      "runs": [
+        {
+          "name": "stack-original-q8_0-defaults-production-silero-r1",
+          "elapsed_seconds": 425.01145440503024,
+          "seconds_per_audio_hour": 58.00390131528107,
+          "gpu_processes": 1,
+          "model": "q8_0",
+          "settings": "defaults"
+        }
+      ]
+    },
+    "stack-patched-bf16-b32t8-production-silero": {
+      "median_seconds_per_audio_hour": 12.120369829042147,
+      "range_seconds_per_audio_hour": [
+        12.062679128266495,
+        12.326922196548626
+      ],
+      "runs": [
+        {
+          "name": "stack-patched-bf16-b32t8-production-silero-r1",
+          "elapsed_seconds": 90.32294401398394,
+          "seconds_per_audio_hour": 12.326922196548626,
+          "gpu_processes": 1,
+          "model": "bf16",
+          "settings": "b32t8"
+        },
+        {
+          "name": "stack-patched-bf16-b32t8-production-silero-r2",
+          "elapsed_seconds": 88.80947474495042,
+          "seconds_per_audio_hour": 12.120369829042147,
+          "gpu_processes": 1,
+          "model": "bf16",
+          "settings": "b32t8"
+        },
+        {
+          "name": "stack-patched-bf16-b32t8-production-silero-r3",
+          "elapsed_seconds": 88.38675820198841,
+          "seconds_per_audio_hour": 12.062679128266495,
+          "gpu_processes": 1,
+          "model": "bf16",
+          "settings": "b32t8"
+        }
+      ]
+    },
+    "stack-patched-q8_0-defaults-production-silero": {
+      "median_seconds_per_audio_hour": 13.520504092511043,
+      "range_seconds_per_audio_hour": [
+        13.513410660792431,
+        13.716935418991406
+      ],
+      "runs": [
+        {
+          "name": "stack-patched-q8_0-defaults-production-silero-r1",
+          "elapsed_seconds": 100.50797515700106,
+          "seconds_per_audio_hour": 13.716935418991406,
+          "gpu_processes": 1,
+          "model": "q8_0",
+          "settings": "defaults"
+        },
+        {
+          "name": "stack-patched-q8_0-defaults-production-silero-r2",
+          "elapsed_seconds": 99.01669006189331,
+          "seconds_per_audio_hour": 13.513410660792431,
+          "gpu_processes": 1,
+          "model": "q8_0",
+          "settings": "defaults"
+        },
+        {
+          "name": "stack-patched-q8_0-defaults-production-silero-r3",
+          "elapsed_seconds": 99.06866569910198,
+          "seconds_per_audio_hour": 13.520504092511043,
+          "gpu_processes": 1,
+          "model": "q8_0",
+          "settings": "defaults"
+        }
+      ]
+    }
+  },
+  "accuracy": {
+    "stack-original-q8_0-defaults-reference-silero-r1": {
+      "normalized": {
+        "words": 8008,
+        "hypothesis_words": 7948,
+        "word_errors": 386,
+        "characters": 38451,
+        "character_errors": 835,
+        "substitutions": 262,
+        "deletions": 92,
+        "insertions": 32,
+        "wer": 0.0482017982017982,
+        "cer": 0.021715950170346675
+      },
+      "without_alef_yaa_folding": {
+        "words": 8008,
+        "hypothesis_words": 7948,
+        "word_errors": 432,
+        "characters": 38451,
+        "character_errors": 887,
+        "substitutions": 308,
+        "deletions": 92,
+        "insertions": 32,
+        "wer": 0.053946053946053944,
+        "cer": 0.023068320719877248
+      }
+    },
+    "stack-original-q8_0-defaults-reference-whole-r1": {
+      "normalized": {
+        "words": 8008,
+        "hypothesis_words": 7959,
+        "word_errors": 384,
+        "characters": 38451,
+        "character_errors": 846,
+        "substitutions": 265,
+        "deletions": 84,
+        "insertions": 35,
+        "wer": 0.04795204795204795,
+        "cer": 0.022002028555824296
+      },
+      "without_alef_yaa_folding": {
+        "words": 8008,
+        "hypothesis_words": 7959,
+        "word_errors": 411,
+        "characters": 38451,
+        "character_errors": 878,
+        "substitutions": 292,
+        "deletions": 84,
+        "insertions": 35,
+        "wer": 0.05132367632367632,
+        "cer": 0.022834256586304648
+      }
+    },
+    "stack-patched-bf16-b32t8-reference-silero-r1": {
+      "normalized": {
+        "words": 8008,
+        "hypothesis_words": 7963,
+        "word_errors": 400,
+        "characters": 38451,
+        "character_errors": 869,
+        "substitutions": 275,
+        "deletions": 85,
+        "insertions": 40,
+        "wer": 0.04995004995004995,
+        "cer": 0.022600192452732048
+      },
+      "without_alef_yaa_folding": {
+        "words": 8008,
+        "hypothesis_words": 7963,
+        "word_errors": 449,
+        "characters": 38451,
+        "character_errors": 926,
+        "substitutions": 326,
+        "deletions": 84,
+        "insertions": 39,
+        "wer": 0.05606893106893107,
+        "cer": 0.024082598632025175
+      }
+    },
+    "stack-patched-bf16-b32t8-reference-whole-r1": {
+      "normalized": {
+        "words": 8008,
+        "hypothesis_words": 7957,
+        "word_errors": 378,
+        "characters": 38451,
+        "character_errors": 836,
+        "substitutions": 263,
+        "deletions": 83,
+        "insertions": 32,
+        "wer": 0.0472027972027972,
+        "cer": 0.021741957296299186
+      },
+      "without_alef_yaa_folding": {
+        "words": 8008,
+        "hypothesis_words": 7957,
+        "word_errors": 406,
+        "characters": 38451,
+        "character_errors": 869,
+        "substitutions": 291,
+        "deletions": 83,
+        "insertions": 32,
+        "wer": 0.050699300699300696,
+        "cer": 0.022600192452732048
+      }
+    },
+    "stack-patched-q8_0-defaults-reference-silero-r1": {
+      "normalized": {
+        "words": 8008,
+        "hypothesis_words": 7949,
+        "word_errors": 382,
+        "characters": 38451,
+        "character_errors": 826,
+        "substitutions": 263,
+        "deletions": 89,
+        "insertions": 30,
+        "wer": 0.047702297702297704,
+        "cer": 0.021481886036774075
+      },
+      "without_alef_yaa_folding": {
+        "words": 8008,
+        "hypothesis_words": 7949,
+        "word_errors": 431,
+        "characters": 38451,
+        "character_errors": 878,
+        "substitutions": 312,
+        "deletions": 89,
+        "insertions": 30,
+        "wer": 0.053821178821178824,
+        "cer": 0.022834256586304648
+      }
+    },
+    "stack-patched-q8_0-defaults-reference-whole-r1": {
+      "normalized": {
+        "words": 8008,
+        "hypothesis_words": 7969,
+        "word_errors": 391,
+        "characters": 38451,
+        "character_errors": 860,
+        "substitutions": 256,
+        "deletions": 87,
+        "insertions": 48,
+        "wer": 0.048826173826173824,
+        "cer": 0.02236612831915945
+      },
+      "without_alef_yaa_folding": {
+        "words": 8008,
+        "hypothesis_words": 7969,
+        "word_errors": 418,
+        "characters": 38451,
+        "character_errors": 890,
+        "substitutions": 283,
+        "deletions": 87,
+        "insertions": 48,
+        "wer": 0.0521978021978022,
+        "cer": 0.02314634209773478
+      }
+    },
+    "original-bf16-silero": {
+      "normalized": {
+        "words": 8008,
+        "hypothesis_words": 7963,
+        "word_errors": 400,
+        "characters": 38451,
+        "character_errors": 869,
+        "substitutions": 275,
+        "deletions": 85,
+        "insertions": 40,
+        "wer": 0.04995004995004995,
+        "cer": 0.022600192452732048
+      },
+      "without_alef_yaa_folding": {
+        "words": 8008,
+        "hypothesis_words": 7963,
+        "word_errors": 449,
+        "characters": 38451,
+        "character_errors": 926,
+        "substitutions": 326,
+        "deletions": 84,
+        "insertions": 39,
+        "wer": 0.05606893106893107,
+        "cer": 0.024082598632025175
+      }
+    },
+    "original-bf16-whole": {
+      "normalized": {
+        "words": 8008,
+        "hypothesis_words": 7957,
+        "word_errors": 378,
+        "characters": 38451,
+        "character_errors": 834,
+        "substitutions": 263,
+        "deletions": 83,
+        "insertions": 32,
+        "wer": 0.0472027972027972,
+        "cer": 0.021689943044394165
+      },
+      "without_alef_yaa_folding": {
+        "words": 8008,
+        "hypothesis_words": 7957,
+        "word_errors": 406,
+        "characters": 38451,
+        "character_errors": 867,
+        "substitutions": 291,
+        "deletions": 83,
+        "insertions": 32,
+        "wer": 0.050699300699300696,
+        "cer": 0.022548178200827027
+      }
+    }
+  },
+  "reference_comparisons": {
+    "q8_0-silero": {
+      "identical_normalized_transcripts": 425,
+      "new_fewer_word_errors": 2,
+      "new_more_word_errors": 0,
+      "confidence_intervals": {
+        "method": "paired bootstrap clustered by reference sentence, 2000 resamples",
+        "wer_95_ci": {
+          "original": [
+            0.037000854805226524,
+            0.06146944713870029
+          ],
+          "patched": [
+            0.03684829478635829,
+            0.0608564988730278
+          ]
+        },
+        "paired_wer_difference_95_ci": {
+          "patched minus original": [
+            -0.001458966565349544,
+            0.0
+          ]
+        }
+      }
+    },
+    "bf16-silero": {
+      "identical_normalized_transcripts": 427,
+      "new_fewer_word_errors": 0,
+      "new_more_word_errors": 0,
+      "confidence_intervals": {
+        "method": "paired bootstrap clustered by reference sentence, 2000 resamples",
+        "wer_95_ci": {
+          "original": [
+            0.03767166435680988,
+            0.06498422712933755
+          ],
+          "patched": [
+            0.03767166435680988,
+            0.06498422712933755
+          ]
+        },
+        "paired_wer_difference_95_ci": {
+          "patched minus original": [
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    "q8_0-whole": {
+      "identical_normalized_transcripts": 418,
+      "new_fewer_word_errors": 3,
+      "new_more_word_errors": 5,
+      "confidence_intervals": {
+        "method": "paired bootstrap clustered by reference sentence, 2000 resamples",
+        "wer_95_ci": {
+          "original": [
+            0.03697183098591549,
+            0.06153050672182006
+          ],
+          "patched": [
+            0.03717472118959108,
+            0.06334022750775595
+          ]
+        },
+        "paired_wer_difference_95_ci": {
+          "patched minus original": [
+            -0.0004995628824778359,
+            0.0029069767441860447
+          ]
+        }
+      }
+    },
+    "bf16-whole": {
+      "identical_normalized_transcripts": 427,
+      "new_fewer_word_errors": 0,
+      "new_more_word_errors": 0,
+      "confidence_intervals": {
+        "method": "paired bootstrap clustered by reference sentence, 2000 resamples",
+        "wer_95_ci": {
+          "original": [
+            0.03617774282343689,
+            0.060550458715596334
+          ],
+          "patched": [
+            0.03617774282343689,
+            0.060550458715596334
+          ]
+        },
+        "paired_wer_difference_95_ci": {
+          "patched minus original": [
+            0.0,
+            0.0
+          ]
+        }
+      }
+    }
+  },
+  "quality_counts": {
+    "stack-original-q8_0-defaults-production-silero-r1": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-original-q8_0-defaults-reference-silero-r1": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-original-q8_0-defaults-reference-whole-r1": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-patched-bf16-b32t8-production-silero-r1": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-patched-bf16-b32t8-production-silero-r2": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-patched-bf16-b32t8-production-silero-r3": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-patched-bf16-b32t8-reference-silero-r1": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-patched-bf16-b32t8-reference-whole-r1": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-patched-q8_0-defaults-production-silero-r1": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-patched-q8_0-defaults-production-silero-r2": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-patched-q8_0-defaults-production-silero-r3": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-patched-q8_0-defaults-reference-silero-r1": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    },
+    "stack-patched-q8_0-defaults-reference-whole-r1": {
+      "failed_jobs": 0,
+      "missing_outputs": 0,
+      "empty_outputs": 0,
+      "invalid_srt_timestamps": 0,
+      "txt_srt_mismatches": 0,
+      "warning_lines": 0
+    }
+  },
+  "resources": {
+    "stack-original-q8_0-defaults-production-silero-r1": {
+      "peak_gpu_memory_mib": 3590.0,
+      "mean_gpu_utilization_percent": 34.53365384615385,
+      "minimum_available_memory_bytes": 28091539456
+    },
+    "stack-original-q8_0-defaults-reference-silero-r1": {
+      "peak_gpu_memory_mib": 3226.0,
+      "mean_gpu_utilization_percent": 42.743589743589745,
+      "minimum_available_memory_bytes": 28260978688
+    },
+    "stack-original-q8_0-defaults-reference-whole-r1": {
+      "peak_gpu_memory_mib": 3250.0,
+      "mean_gpu_utilization_percent": 41.41732283464567,
+      "minimum_available_memory_bytes": 28620935168
+    },
+    "stack-patched-bf16-b32t8-production-silero-r1": {
+      "peak_gpu_memory_mib": 6266.0,
+      "mean_gpu_utilization_percent": 88.0561797752809,
+      "minimum_available_memory_bytes": 27842850816
+    },
+    "stack-patched-bf16-b32t8-production-silero-r2": {
+      "peak_gpu_memory_mib": 6266.0,
+      "mean_gpu_utilization_percent": 90.9080459770115,
+      "minimum_available_memory_bytes": 27848216576
+    },
+    "stack-patched-bf16-b32t8-production-silero-r3": {
+      "peak_gpu_memory_mib": 6266.0,
+      "mean_gpu_utilization_percent": 93.33333333333333,
+      "minimum_available_memory_bytes": 27772387328
+    },
+    "stack-patched-bf16-b32t8-reference-silero-r1": {
+      "peak_gpu_memory_mib": 4838.0,
+      "mean_gpu_utilization_percent": 84.12280701754386,
+      "minimum_available_memory_bytes": 28405669888
+    },
+    "stack-patched-bf16-b32t8-reference-whole-r1": {
+      "peak_gpu_memory_mib": 4860.0,
+      "mean_gpu_utilization_percent": 81.32203389830508,
+      "minimum_available_memory_bytes": 28436381696
+    },
+    "stack-patched-q8_0-defaults-production-silero-r1": {
+      "peak_gpu_memory_mib": 3598.0,
+      "mean_gpu_utilization_percent": 88.5050505050505,
+      "minimum_available_memory_bytes": 28430032896
+    },
+    "stack-patched-q8_0-defaults-production-silero-r2": {
+      "peak_gpu_memory_mib": 3598.0,
+      "mean_gpu_utilization_percent": 90.78350515463917,
+      "minimum_available_memory_bytes": 28464873472
+    },
+    "stack-patched-q8_0-defaults-production-silero-r3": {
+      "peak_gpu_memory_mib": 3598.0,
+      "mean_gpu_utilization_percent": 92.05154639175258,
+      "minimum_available_memory_bytes": 28414210048
+    },
+    "stack-patched-q8_0-defaults-reference-silero-r1": {
+      "peak_gpu_memory_mib": 3238.0,
+      "mean_gpu_utilization_percent": 79.36,
+      "minimum_available_memory_bytes": 28571893760
+    },
+    "stack-patched-q8_0-defaults-reference-whole-r1": {
+      "peak_gpu_memory_mib": 3246.0,
+      "mean_gpu_utilization_percent": 78.92307692307692,
+      "minimum_available_memory_bytes": 28523036672
+    }
+  },
+  "timing_corpus_output_agreement": {
+    "stack-patched-bf16-b32t8-production-silero versus original": {
+      "identical_normalized_files": 7,
+      "recordings": 16,
+      "word_edit_distance": {
+        "words": 50414,
+        "hypothesis_words": 50415,
+        "word_errors": 24,
+        "characters": 210509,
+        "character_errors": 47,
+        "substitutions": 21,
+        "deletions": 1,
+        "insertions": 2,
+        "wer": 0.0004760582377910898,
+        "cer": 0.00022326836382292444
+      },
+      "note": "Output agreement, not accuracy against human references."
+    },
+    "stack-patched-bf16-b32t8-production-silero versus stack-patched-bf16-b32t8-production-silero-r2": {
+      "identical_normalized_files": 11,
+      "recordings": 16,
+      "word_edit_distance": {
+        "words": 50414,
+        "hypothesis_words": 50415,
+        "word_errors": 17,
+        "characters": 210511,
+        "character_errors": 17,
+        "substitutions": 14,
+        "deletions": 1,
+        "insertions": 2,
+        "wer": 0.00033720791843535523,
+        "cer": 8.075587498990552e-05
+      },
+      "note": "Output agreement, not accuracy against human references."
+    },
+    "stack-patched-bf16-b32t8-production-silero versus stack-patched-bf16-b32t8-production-silero-r3": {
+      "identical_normalized_files": 16,
+      "recordings": 16,
+      "word_edit_distance": {
+        "words": 50415,
+        "hypothesis_words": 50415,
+        "word_errors": 0,
+        "characters": 210506,
+        "character_errors": 0,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0.0,
+        "cer": 0.0
+      },
+      "note": "Output agreement, not accuracy against human references."
+    },
+    "stack-patched-q8_0-defaults-production-silero versus original": {
+      "identical_normalized_files": 1,
+      "recordings": 16,
+      "word_edit_distance": {
+        "words": 50414,
+        "hypothesis_words": 50412,
+        "word_errors": 80,
+        "characters": 210501,
+        "character_errors": 118,
+        "substitutions": 72,
+        "deletions": 5,
+        "insertions": 3,
+        "wer": 0.0015868607926369659,
+        "cer": 0.0005605674082308397
+      },
+      "note": "Output agreement, not accuracy against human references."
+    },
+    "stack-patched-q8_0-defaults-production-silero versus stack-patched-q8_0-defaults-production-silero-r2": {
+      "identical_normalized_files": 16,
+      "recordings": 16,
+      "word_edit_distance": {
+        "words": 50412,
+        "hypothesis_words": 50412,
+        "word_errors": 0,
+        "characters": 210506,
+        "character_errors": 0,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "wer": 0.0,
+        "cer": 0.0
+      },
+      "note": "Output agreement, not accuracy against human references."
+    },
+    "stack-patched-q8_0-defaults-production-silero versus stack-patched-q8_0-defaults-production-silero-r3": {
+      "identical_normalized_files": 4,
+      "recordings": 16,
+      "word_edit_distance": {
+        "words": 50414,
+        "hypothesis_words": 50412,
+        "word_errors": 55,
+        "characters": 210510,
+        "character_errors": 92,
+        "substitutions": 51,
+        "deletions": 3,
+        "insertions": 1,
+        "wer": 0.0010909667949379142,
+        "cer": 0.0004370338701249347
+      },
+      "note": "Output agreement, not accuracy against human references."
+    }
+  },
+  "resource_note": "Whole-device readings, including desktop usage, sampled approximately once per second.",
+  "accuracy_limit": "One inference pass per FLEURS setting; bootstrap intervals cover reference-sentence sampling only, not run-to-run output variation. Repeated GPU passes also differ slightly. No human-verified timing-recording accuracy is claimed.",
+  "previous_matched_bf16_comparison": {
+    "timings": {
+      "native": {
+        "median_seconds_per_audio_hour": 47.01540604322691,
+        "mean_seconds_per_audio_hour": 47.11977808005251,
+        "range_seconds_per_audio_hour": [
+          46.6680343579863,
+          47.675893838944326
+        ],
+        "runs": [
+          {
+            "name": "native-bf16-prod-r1",
+            "elapsed_seconds": 349.3351398970699,
+            "seconds_per_audio_hour": 47.675893838944326,
+            "audio_seconds": 26378.247,
+            "gpu_processes": 2
+          },
+          {
+            "name": "native-bf16-prod-r2",
+            "elapsed_seconds": 341.95026036095805,
+            "seconds_per_audio_hour": 46.6680343579863,
+            "audio_seconds": 26378.247,
+            "gpu_processes": 2
+          },
+          {
+            "name": "native-bf16-prod-r3",
+            "elapsed_seconds": 344.49555372598115,
+            "seconds_per_audio_hour": 47.01540604322691,
+            "audio_seconds": 26378.247,
+            "gpu_processes": 2
+          }
+        ]
+      },
+      "package": {
+        "median_seconds_per_audio_hour": 10.349839279891395,
+        "mean_seconds_per_audio_hour": 10.375246610771166,
+        "range_seconds_per_audio_hour": [
+          10.18952421410142,
+          10.586376338320681
+        ],
+        "runs": [
+          {
+            "name": "package-bf16-prod-r1",
+            "elapsed_seconds": 77.56945830199402,
+            "seconds_per_audio_hour": 10.586376338320681,
+            "audio_seconds": 26378.247,
+            "gpu_processes": 1
+          },
+          {
+            "name": "package-bf16-prod-r2",
+            "elapsed_seconds": 74.66160737001337,
+            "seconds_per_audio_hour": 10.18952421410142,
+            "audio_seconds": 26378.247,
+            "gpu_processes": 1
+          },
+          {
+            "name": "package-bf16-prod-r3",
+            "elapsed_seconds": 75.83628248202149,
+            "seconds_per_audio_hour": 10.349839279891395,
+            "audio_seconds": 26378.247,
+            "gpu_processes": 1
+          }
+        ]
+      }
+    },
+    "accuracy": {
+      "package-bf16-reference-silero": {
+        "normalized": {
+          "words": 8008,
+          "hypothesis_words": 7949,
+          "word_errors": 392,
+          "characters": 38451,
+          "character_errors": 857,
+          "substitutions": 261,
+          "deletions": 95,
+          "insertions": 36,
+          "wer": 0.04895104895104895,
+          "cer": 0.022288106941301917
+        },
+        "without_alef_yaa_folding": {
+          "words": 8008,
+          "hypothesis_words": 7949,
+          "word_errors": 439,
+          "characters": 38451,
+          "character_errors": 907,
+          "substitutions": 308,
+          "deletions": 95,
+          "insertions": 36,
+          "wer": 0.054820179820179823,
+          "cer": 0.023588463238927465
+        }
+      },
+      "package-bf16-reference-whole": {
+        "normalized": {
+          "words": 8008,
+          "hypothesis_words": 7965,
+          "word_errors": 382,
+          "characters": 38451,
+          "character_errors": 833,
+          "substitutions": 257,
+          "deletions": 84,
+          "insertions": 41,
+          "wer": 0.047702297702297704,
+          "cer": 0.02166393591844165
+        },
+        "without_alef_yaa_folding": {
+          "words": 8008,
+          "hypothesis_words": 7965,
+          "word_errors": 409,
+          "characters": 38451,
+          "character_errors": 862,
+          "substitutions": 284,
+          "deletions": 84,
+          "insertions": 41,
+          "wer": 0.05107392607392607,
+          "cer": 0.022418142571064472
+        }
+      }
+    },
+    "native_accuracy": "See accuracy.original-bf16-silero and accuracy.original-bf16-whole above."
+  },
+  "validation_limits": "Native-to-native tensor parity passed 22/22 existing tolerances. The upstream March-manifest reference check with the July Arabic model fails the same 14/22 thresholds in unmodified and patched native 0.4.1. Unmodified and patched native also share an unsupported-timestamp result-clearing failure; tafrigh requests no native timestamps.",
+  "baseline_release": {
+    "tag": "v0.4.0",
+    "archive": "tafrigh-v0.4.0-x86_64-unknown-linux-gnu-cuda13.tar.gz",
+    "archive_sha256": "6ca4f1fbf633f98ac0886d44101a48d4ea936be999dc02ad4f30e8e500a13dcc",
+    "binary_sha256": "102b710232e1d7d209f42e18644a3384d86d0c25c9e469344fb16f283ddda9d4",
+    "sm_89_sass_verified": true
+  },
+  "accuracy_reproduction": {
+    "script": "score-cohere-fleurs.py",
+    "counts": "cohere-cuda-2026-10-23-fleurs.csv",
+    "provenance": "cohere-cuda-2026-10-23-fleurs.json",
+    "seed": 20261023,
+    "resamples": 2000
+  },
+  "review_thread_comparison": {
+    "binary_sha256": "0bafc7d98bd135d5fc1e5dfbded7a89c47c2cce068128c9d41ce2254b20f248c",
+    "audio_seconds": 26378.247,
+    "recordings": 16,
+    "order": [
+      0,
+      8,
+      8,
+      0,
+      0,
+      8
+    ],
+    "settings": "Q8_0, maximum batch 8, GPU, Silero/merge/30s, explicit --pad 0; same frozen timing corpus and debug logging as the initial report.",
+    "runs": [
+      {
+        "name": "review44-q8-threads-0-pass-1",
+        "started_at": "2026-10-23T21:01:16.572581+00:00",
+        "finished_at": "2026-10-23T21:02:55.511660+00:00",
+        "elapsed_seconds": 98.93861441698391,
+        "failed_jobs": 0,
+        "seconds_per_audio_hour": 13.502755202085343,
+        "gpu_processes": 1,
+        "threads": 26,
+        "quality_counts": {
+          "failed_jobs": 0,
+          "missing_outputs": 0,
+          "empty_outputs": 0,
+          "invalid_srt_timestamps": 0,
+          "txt_srt_mismatches": 0,
+          "warning_lines": 0
+        },
+        "resources": {
+          "peak_gpu_memory_mib": 3598.0,
+          "mean_gpu_utilization_percent": 90.41237113402062,
+          "minimum_available_memory_bytes": 27154440192
+        }
+      },
+      {
+        "name": "review44-q8-threads-8-pass-2",
+        "started_at": "2026-10-23T21:02:55.516622+00:00",
+        "finished_at": "2026-10-23T21:04:34.687599+00:00",
+        "elapsed_seconds": 99.17001397896092,
+        "failed_jobs": 0,
+        "seconds_per_audio_hour": 13.534335709429794,
+        "gpu_processes": 1,
+        "threads": 8,
+        "quality_counts": {
+          "failed_jobs": 0,
+          "missing_outputs": 0,
+          "empty_outputs": 0,
+          "invalid_srt_timestamps": 0,
+          "txt_srt_mismatches": 0,
+          "warning_lines": 0
+        },
+        "resources": {
+          "peak_gpu_memory_mib": 3598.0,
+          "mean_gpu_utilization_percent": 91.51020408163265,
+          "minimum_available_memory_bytes": 27750289408
+        }
+      },
+      {
+        "name": "review44-q8-threads-8-pass-3",
+        "started_at": "2026-10-23T21:04:34.690895+00:00",
+        "finished_at": "2026-10-23T21:06:13.708181+00:00",
+        "elapsed_seconds": 99.01668477605563,
+        "failed_jobs": 0,
+        "seconds_per_audio_hour": 13.513409939401972,
+        "gpu_processes": 1,
+        "threads": 8,
+        "quality_counts": {
+          "failed_jobs": 0,
+          "missing_outputs": 0,
+          "empty_outputs": 0,
+          "invalid_srt_timestamps": 0,
+          "txt_srt_mismatches": 0,
+          "warning_lines": 0
+        },
+        "resources": {
+          "peak_gpu_memory_mib": 3598.0,
+          "mean_gpu_utilization_percent": 89.95876288659794,
+          "minimum_available_memory_bytes": 27861942272
+        }
+      },
+      {
+        "name": "review44-q8-threads-0-pass-4",
+        "started_at": "2026-10-23T21:06:13.709257+00:00",
+        "finished_at": "2026-10-23T21:07:52.582564+00:00",
+        "elapsed_seconds": 98.87262789800297,
+        "failed_jobs": 0,
+        "seconds_per_audio_hour": 13.493749620011167,
+        "gpu_processes": 1,
+        "threads": 26,
+        "quality_counts": {
+          "failed_jobs": 0,
+          "missing_outputs": 0,
+          "empty_outputs": 0,
+          "invalid_srt_timestamps": 0,
+          "txt_srt_mismatches": 0,
+          "warning_lines": 0
+        },
+        "resources": {
+          "peak_gpu_memory_mib": 3598.0,
+          "mean_gpu_utilization_percent": 92.98969072164948,
+          "minimum_available_memory_bytes": 27883941888
+        }
+      },
+      {
+        "name": "review44-q8-threads-0-pass-5",
+        "started_at": "2026-10-23T21:07:52.587582+00:00",
+        "finished_at": "2026-10-23T21:09:31.480718+00:00",
+        "elapsed_seconds": 98.89224736997858,
+        "failed_jobs": 0,
+        "seconds_per_audio_hour": 13.496427208825624,
+        "gpu_processes": 1,
+        "threads": 26,
+        "quality_counts": {
+          "failed_jobs": 0,
+          "missing_outputs": 0,
+          "empty_outputs": 0,
+          "invalid_srt_timestamps": 0,
+          "txt_srt_mismatches": 0,
+          "warning_lines": 0
+        },
+        "resources": {
+          "peak_gpu_memory_mib": 3598.0,
+          "mean_gpu_utilization_percent": 90.15463917525773,
+          "minimum_available_memory_bytes": 27844444160
+        }
+      },
+      {
+        "name": "review44-q8-threads-8-pass-6",
+        "started_at": "2026-10-23T21:09:31.482160+00:00",
+        "finished_at": "2026-10-23T21:11:10.761704+00:00",
+        "elapsed_seconds": 99.27898196002934,
+        "failed_jobs": 0,
+        "seconds_per_audio_hour": 13.549207233373227,
+        "gpu_processes": 1,
+        "threads": 8,
+        "quality_counts": {
+          "failed_jobs": 0,
+          "missing_outputs": 0,
+          "empty_outputs": 0,
+          "invalid_srt_timestamps": 0,
+          "txt_srt_mismatches": 0,
+          "warning_lines": 0
+        },
+        "resources": {
+          "peak_gpu_memory_mib": 3598.0,
+          "mean_gpu_utilization_percent": 90.63265306122449,
+          "minimum_available_memory_bytes": 27883622400
+        }
+      }
+    ],
+    "automatic_threads": 26,
+    "summary": {
+      "automatic": {
+        "median_seconds_per_audio_hour": 13.496427208825624,
+        "range_seconds_per_audio_hour": [
+          13.493749620011167,
+          13.502755202085343
+        ]
+      },
+      "explicit_8": {
+        "median_seconds_per_audio_hour": 13.534335709429794,
+        "range_seconds_per_audio_hour": [
+          13.513409939401972,
+          13.549207233373227
+        ]
+      }
+    },
+    "interpretation": "Three interleaved passes per setting, one GPU process each. The approximately 0.3% median difference gives no practical reason to change the current GPU auto policy on this corpus. Not an accuracy comparison against human references."
+  }
+}

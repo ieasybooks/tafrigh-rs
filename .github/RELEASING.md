@@ -1,6 +1,6 @@
 # Releasing
 
-All five crates share one version and one `vX.Y.Z` tag. Use [Conventional Commits](https://github.com/googleapis/release-please): `fix:` bumps the patch version, `feat:` bumps the minor version, and `feat!:` or a `BREAKING CHANGE:` footer marks incompatible changes. Before 1.0, breaking changes also bump the minor version. Keep the same convention in squash-merge titles and preserve breaking-change footers.
+All six crates share one version and one `vX.Y.Z` tag. Use [Conventional Commits](https://github.com/googleapis/release-please): `fix:` bumps the patch version, `feat:` bumps the minor version, and `feat!:` or a `BREAKING CHANGE:` footer marks incompatible changes. Before 1.0, breaking changes also bump the minor version. Keep the same convention in squash-merge titles and preserve breaking-change footers.
 
 After changes reach `main`, release-please opens or updates one release PR. It generates `CHANGELOG.md` and GitHub release notes from the Conventional Commits, including breaking-change descriptions. Write useful commit messages instead of maintaining an `Unreleased` section by hand. Review the generated version, lockfile, changelog, and checks before merging.
 
@@ -8,8 +8,10 @@ Merging the release PR creates the GitHub release and dispatches the existing bi
 
 The workflow uses the repository's `GITHUB_TOKEN`; no additional personal token is needed. GitHub's **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** setting must be enabled. If GitHub requests approval for checks on a bot-created release PR, approve those workflow runs before merging.
 
-The root `Cargo.toml` defines `tafrigh-cli` and lists the four library members explicitly. Each package and internal path dependency declares its version directly. release-please's `rust` strategy updates all five package versions, their internal dependency requirements, and `Cargo.lock` together in the release PR. `.release-please-manifest.json` records the release baseline. CI checks that all package versions match. Publish `tafrigh` before `tafrigh-wit`, `tafrigh-youtube` and `tafrigh-cohere`, then publish `tafrigh-cli`.
+The root `Cargo.toml` defines `tafrigh-cli` and lists the five library members explicitly. Each package and internal path dependency declares its version directly. release-please's `rust` strategy updates all six package versions, their internal dependency requirements, and `Cargo.lock` together in the release PR. `.release-please-manifest.json` records the release baseline. CI checks that all package versions match. Publish `tafrigh` and `tafrigh-transcribe` before `tafrigh-wit`, `tafrigh-youtube` and `tafrigh-cohere`, then publish `tafrigh-cli`.
 
-The first publication of a new crate, such as `tafrigh-cohere`, requires a crates.io API token in `CARGO_REGISTRY_TOKEN` because trusted publishing can only be configured after the crate exists. Configure the new crate's trusted publisher for this repository's `publish.yml` workflow and `release` environment after that first publication.
+Use each workspace package's actual name as its dependency key, even when its Rust library has a different name. release-please updates path-dependency versions by that key and does not follow Cargo's `package` aliases. CI checks both the keys and version requirements against the workspace packages.
+
+The first publication of a new crate, such as `tafrigh-transcribe`, requires a crates.io API token in `CARGO_REGISTRY_TOKEN` because trusted publishing can only be configured after the crate exists. Configure the new crate's trusted publisher for this repository's `publish.yml` workflow and `release` environment after that first publication.
 
 The workflow explicitly dispatches publishing because a release created with `GITHUB_TOKEN` does not trigger release-event workflows. See [GitHub's workflow trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow) and [release-please's Rust strategy](https://github.com/googleapis/release-please/blob/main/src/strategies/rust.ts).

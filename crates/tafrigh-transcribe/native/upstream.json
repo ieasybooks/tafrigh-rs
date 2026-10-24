@@ -1,0 +1,37 @@
+{
+  "repository": "https://github.com/handy-computer/transcribe.cpp",
+  "version": "0.4.1",
+  "commit": "4d7c1ccefd39e5a9ea36cca5f8fefc6dcc14b99b",
+  "archive": "transcribe-cpp-sys-0.4.1.crate",
+  "url": "https://static.crates.io/crates/transcribe-cpp-sys/transcribe-cpp-sys-0.4.1.crate",
+  "sha256": "23a837974fdb873998a59a21ad2bf5a4b7bbf721c20d03d2a3ab8c221726a444",
+  "bindings_archive_sha256": "8bab65d30f5a4c3ea0ab6f38236823389f3914b0605bbc0073a4ec88018c0714",
+  "bindings_adaptations": [
+    "Combine the safe and raw binding crates, using crate::sys imports.",
+    "Read the native ABI version from this metadata through a build-script environment value, independently of the tafrigh package version.",
+    "Pass the extracted source directory into the upstream build helper; reject TRANSCRIBE_DIR and watch bundled inputs instead of generated source.",
+    "Point Rust documentation at tafrigh-transcribe, combine copyright notices, and link omitted upstream license references to the pinned commit."
+  ],
+  "patches": [
+    {
+      "path": "src/arch/cohere/cohere.h",
+      "patch": "patches/src_arch_cohere_cohere.h.patch"
+    },
+    {
+      "path": "src/arch/cohere/model.cpp",
+      "patch": "patches/src_arch_cohere_model.cpp.patch"
+    },
+    {
+      "path": "src/arch/cohere/encoder.cpp",
+      "patch": "patches/src_arch_cohere_encoder.cpp.patch"
+    },
+    {
+      "path": "src/conformer/conformer.h",
+      "patch": "patches/src_conformer_conformer.h.patch"
+    },
+    {
+      "path": "src/conformer/conformer.cpp",
+      "patch": "patches/src_conformer_conformer.cpp.patch"
+    }
+  ]
+}

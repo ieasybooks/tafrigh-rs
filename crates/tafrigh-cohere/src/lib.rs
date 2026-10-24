@@ -8,7 +8,7 @@
 //!
 //! Concurrent requests share one model and session. GPU requests are collected into bounded
 //! batches; CPU requests run individually. Loading and inference run on blocking threads.
-//! The `cuda` feature enables NVIDIA GPUs; the upstream default enables Metal on Apple.
+//! The `cuda` feature enables NVIDIA GPUs; the bundled runtime enables Metal on Apple by default.
 //! Building requires `CMake` and a C++ compiler. Model weights are not bundled.
 //!
 //! Select a pinned [`ModelVariant`] (`Q8_0` by default) or a local [`ModelSource::Local`] file.
@@ -31,7 +31,7 @@ mod error;
 mod model;
 mod recognizer;
 
-pub use config::{CohereConfig, Device, Language};
+pub use config::{CohereConfig, Device, Language, MAX_BATCH_SIZE, MAX_THREADS};
 pub use error::CohereError;
 pub use model::{
     DownloadProgress, MODEL_REVISION, ModelMetadata, ModelSource, ModelVariant, default_model_dir,

@@ -1,0 +1,36 @@
+{
+  "dataset": {
+    "dataset": "google/fleurs",
+    "configuration": "ar_eg",
+    "split": "test",
+    "revision": "70bb2e84b976b7e960aa89f1c648e09c59f894dd",
+    "license": "CC BY 4.0",
+    "url": "https://huggingface.co/datasets/google/fleurs",
+    "archive_sha256": "787dc348725c0924ff58c8e379d4ef41a7e488dc2ab2990a0eba4a063856edb1",
+    "audio_seconds": 4685.4670625
+  },
+  "attribution": "Google FLEURS ar_eg test, CC BY 4.0. Error counts derived from human references and model predictions; text and audio are not included.",
+  "counts_sha256": "167f651d27545135bdb297790ca47408e3067d159085c46bd063b09a31e8dd28",
+  "clips_per_run": 428,
+  "reference_sentence_clusters": 283,
+  "normalized_reference_words": 8008,
+  "normalized_reference_characters": 38451,
+  "runs": 8,
+  "rows": 3424,
+  "source_counts": "The frozen per-clip records from the eight published native runs. Every normalized count was rescored from its saved public reference and hypothesis; every aggregate was checked against the published report.",
+  "strict_counts": "Rescored without Alef/Yaa folding using the original normalization and RapidFuzz 3.14.6; every resulting aggregate matches the published report.",
+  "csv_columns": {
+    "run": "Identifier from the accuracy section of the published benchmark JSON.",
+    "clip_id": "Public FLEURS audio filename stem, not a private timing-recording identifier.",
+    "sentence_id": "Public reference-sentence cluster ID; keep it as a string for the original lexicographic bootstrap order.",
+    "strict_*": "Counts without Alef/Yaa folding; reference and hypothesis lengths match the primary normalization.",
+    "same_as_original": "1 when this normalized output equals the original output for this model/segmentation, 0 otherwise; original rows equal themselves."
+  },
+  "bootstrap": {
+    "seed": 20261023,
+    "resamples": 2000,
+    "sampling": "Paired reference-sentence clusters, with replacement. Include every clip in each selected cluster. Use sum(errors)/sum(reference words), not the mean of clip rates.",
+    "quantiles": "Sorted samples at zero-based floor(0.025*n) and floor(0.975*n); no interpolation."
+  },
+  "limitations": "Each setting is one inference pass; each CSV row is one clip within that pass. Bootstrap intervals cover reference-sentence sampling only, not GPU run-to-run variation. The counts reproduce published statistics but cannot replace audio, reference text, predictions and an inference rerun."
+}

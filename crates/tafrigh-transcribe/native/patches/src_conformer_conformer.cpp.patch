@@ -1,0 +1,14 @@
+--- a/src/conformer/conformer.cpp
++++ b/src/conformer/conformer.cpp
+@@ -393,7 +393,10 @@
+             ggml_tensor * gate  = ggml_view_3d(ctx, x, half, T, B, x->nb[1], x->nb[2],
+                                                /*offset=*/0);
+             ggml_tensor * value = ggml_view_3d(ctx, x, half, T, B, x->nb[1], x->nb[2], half * ggml_element_size(x));
+-            x                   = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
++            if (policy.contiguous_glu) {
++                value = ggml_cont(ctx, value);
++            }
++            x = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
+         }
+         // x ne = [d_model, T, B]
+ 

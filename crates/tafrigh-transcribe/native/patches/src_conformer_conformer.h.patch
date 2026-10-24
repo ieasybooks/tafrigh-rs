@@ -1,0 +1,11 @@
+--- a/src/conformer/conformer.h
++++ b/src/conformer/conformer.h
+@@ -107,6 +107,8 @@
+ // differ from the block convolutions. Defaults keep the established im2col
+ // paths except for direct_pw; families opt into direct pre-encode ops.
+ struct ConvPolicy {
++    // CUDA unary kernels require a contiguous GLU sigmoid input.
++    bool contiguous_glu             = false;
+     bool direct_pw                  = true;
+     bool direct_conv0_in_pre_encode = false;
+     bool direct_dw_in_block         = false;

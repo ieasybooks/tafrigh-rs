@@ -406,6 +406,15 @@ pub struct Models {
     #[usage(long, value_name = "DEVICE", default = "auto")]
     pub device: String,
 
+    /// Maximum chunks in a Cohere GPU batch (1–64; default 8). CPU processes one at a time.
+    #[usage(long, value_name = "N")]
+    pub cohere_batch_size: Option<usize>,
+
+    /// Native inference threads, at most the available CPU parallelism and 512. Omitted or 0:
+    /// GPU uses available CPUs minus two (at least one); CPU uses at most eight.
+    #[usage(long, value_name = "N")]
+    pub threads: Option<usize>,
+
     /// Where downloaded models are kept [default: tafrigh/models in the user cache folder,
     /// such as ~/.cache/tafrigh/models on Linux or ~/Library/Caches/tafrigh/models on macOS].
     #[usage(long, value_name = "DIR", value_hint = usage_rs::ValueHint::DirPath)]

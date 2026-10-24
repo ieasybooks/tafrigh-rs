@@ -10,7 +10,7 @@ use transcribe_cpp::{
     Backend, DeviceType, Model, ModelOptions, RunOptions, Session, SessionOptions,
 };
 
-use crate::{CohereConfig, CohereError, Device, DownloadProgress};
+use crate::{CohereConfig, CohereError, Device, DownloadProgress, MAX_THREADS};
 
 /// One sample at 16 kHz, in nanoseconds.
 const SAMPLE_NANOS: u64 = 1_000_000_000 / SAMPLE_RATE as u64;
@@ -34,6 +34,7 @@ pub struct CohereRecognizer {
     /// `max_audio_duration` in samples, so chunks are checked exactly.
     max_samples: usize,
     batch_size: usize,
+    threads: usize,
     requests: mpsc::Sender<Request>,
 }
 
@@ -66,7 +67,8 @@ impl CohereRecognizer {
             .resolve(config.model_dir.as_deref(), &progress)
             .await?;
         let settings = config.clone();
-        let session = tokio::task::spawn_blocking(move || load_session(&settings, &path)).await??;
+        let (session, threads) =
+            tokio::task::spawn_blocking(move || load_session(&settings, &path)).await??;
         let model = session.model();
         let backend = model.backend();
         let device_name = model.device()?.description;
@@ -91,6 +93,7 @@ impl CohereRecognizer {
             device = %device_name,
             ?limits,
             batch_size,
+            threads,
             "opened Cohere session"
         );
         let (requests, receiver) = mpsc::channel(batch_size);
@@ -114,6 +117,7 @@ impl CohereRecognizer {
             max_audio_duration,
             max_samples: samples_in(max_audio_duration),
             batch_size,
+            threads,
             requests,
         })
     }
@@ -132,13 +136,24 @@ impl CohereRecognizer {
     pub fn device_name(&self) -> &str {
         &self.device_name
     }
+
+    /// Actual maximum batch size after device selection: always one on CPU.
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+
+    /// Positive native inference thread count after automatic selection, if requested.
+    /// Other process work, including single-chunk mel preprocessing, has its own threads.
+    pub fn threads(&self) -> usize {
+        self.threads
+    }
 }
 
 fn is_gpu(device: &transcribe_cpp::Device) -> bool {
     matches!(device.device_type, DeviceType::Gpu | DeviceType::Igpu)
 }
 
-fn load_session(config: &CohereConfig, path: &Path) -> Result<Session, CohereError> {
+fn load_session(config: &CohereConfig, path: &Path) -> Result<(Session, usize), CohereError> {
     // Validate the file before initializing native backends or allocating weights.
     if !std::fs::metadata(path)?.is_file() {
         return Err(CohereError::Config(
@@ -179,6 +194,7 @@ fn load_session(config: &CohereConfig, path: &Path) -> Result<Session, CohereErr
             &ModelOptions {
                 backend: Backend::Auto,
                 device: Some(gpu),
+                ..ModelOptions::default()
             },
         ) {
             Ok(session) => return Ok(session),
@@ -194,6 +210,7 @@ fn load_session(config: &CohereConfig, path: &Path) -> Result<Session, CohereErr
         &ModelOptions {
             backend: Backend::Cpu,
             device: None,
+            ..ModelOptions::default()
         },
     )
 }
@@ -202,7 +219,7 @@ fn open_session(
     config: &CohereConfig,
     path: &Path,
     options: &ModelOptions,
-) -> Result<Session, CohereError> {
+) -> Result<(Session, usize), CohereError> {
     let model = Model::load_with(path, options)?;
     if model.arch() != "cohere_asr" {
         return Err(CohereError::Config(format!(
@@ -226,21 +243,27 @@ fn open_session(
             config.language
         )));
     }
-    let threads = match config.threads {
-        0 if options.device.is_some() => gpu_threads(),
-        threads => threads,
+    let threads = if config.threads == 0 {
+        let available = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        automatic_threads(is_gpu(&model.device()?), available)
+    } else {
+        config.threads
     };
-    Ok(model.session_with(&SessionOptions {
+    let session = model.session_with(&SessionOptions {
         n_threads: threads as i32,
         ..SessionOptions::default()
-    })?)
+    })?;
+    Ok((session, threads))
 }
 
-/// CPU threads for a model on a GPU: every core but two. Decoding and Silero VAD run alongside
-/// the model; on a 6-core machine, transcribe.cpp's default of every core was about 15% slower
-/// than four threads.
-fn gpu_threads() -> usize {
-    std::thread::available_parallelism().map_or(1, |cores| cores.get().saturating_sub(2).max(1))
+/// Leave room for decoding and VAD on GPU. On CPU, preserve the native eight-thread ceiling
+/// while using Rust's quota-aware available parallelism instead of native affinity alone.
+fn automatic_threads(gpu: bool, available: usize) -> usize {
+    if gpu {
+        available.saturating_sub(2).clamp(1, MAX_THREADS)
+    } else {
+        available.clamp(1, 8)
+    }
 }
 
 #[async_trait]
@@ -258,16 +281,30 @@ impl ChunkRecognizer for CohereRecognizer {
         if chunk.samples.len() < MIN_SAMPLES {
             return Ok(Recognition::default());
         }
-        let (reply, result) = oneshot::channel();
-        self.requests
-            .send(Request {
-                pcm: pcm_f32(&chunk.samples),
-                chunk: (chunk.index, chunk.start, chunk.end),
-                reply,
-            })
+        // Wait for queue capacity before allocating another float PCM buffer.
+        // Concurrent files can otherwise retain prepared buffers outside the queue.
+        let permit = self
+            .requests
+            .reserve()
             .await
             .map_err(|_| CohereError::WorkerStopped)?;
-        Ok(result.await.map_err(|_| CohereError::WorkerStopped)??)
+        let (reply, mut result) = oneshot::channel();
+        permit.send(Request {
+            pcm: pcm_f32(&chunk.samples),
+            chunk: (chunk.index, chunk.start, chunk.end),
+            reply,
+        });
+        // A reserved permit can enqueue after the worker has dropped its receiver.
+        // In that case the queued reply sender stays alive, but nobody can answer it.
+        let answer = tokio::select! {
+            biased;
+            answer = &mut result => answer.map_err(|_| CohereError::WorkerStopped)?,
+            () = self.requests.closed() => {
+                // A reply may arrive between polling `result` and observing closure.
+                result.try_recv().map_err(|_| CohereError::WorkerStopped)?
+            }
+        };
+        Ok(answer?)
     }
 
     fn word_timings(&self) -> bool {
@@ -279,7 +316,10 @@ impl ChunkRecognizer for CohereRecognizer {
     }
 
     fn max_in_flight(&self) -> usize {
-        self.batch_size
+        // Keep one batch ready while the session works on the current one.
+        // Reserving before conversion bounds request float PCM to two batches across all files.
+        // Each file also retains its in-flight i16 chunks and the core's producer queue.
+        2 * self.batch_size
     }
 }
 
@@ -289,6 +329,8 @@ fn samples_in(duration: Duration) -> usize {
 }
 
 fn pcm_f32(samples: &[i16]) -> Vec<f32> {
+    #[cfg(test)]
+    tests::converting_pcm();
     samples
         .iter()
         .map(|&sample| f32::from(sample) / 32768.0)
@@ -409,10 +451,25 @@ async fn worker(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+
     use tafrigh::segment::FixedWindows;
     use tafrigh::{ChunkOptions, ChunkedTranscriber, NoProgress, Transcriber};
 
     use super::*;
+
+    thread_local! {
+        static PCM_CONVERSIONS: Cell<usize> = const { Cell::new(0) };
+        static ON_PCM_CONVERSION: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn converting_pcm() {
+        PCM_CONVERSIONS.set(PCM_CONVERSIONS.get() + 1);
+        let hook = ON_PCM_CONVERSION.with_borrow_mut(Option::take);
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 
     /// A recognizer whose requests arrive on the returned receiver instead of a model.
     fn fake_recognizer() -> (CohereRecognizer, mpsc::Receiver<Request>) {
@@ -424,6 +481,7 @@ mod tests {
             max_audio_duration: MAX_AUDIO_DURATION,
             max_samples: samples_in(MAX_AUDIO_DURATION),
             batch_size: 1,
+            threads: 1,
             requests,
         };
         (recognizer, receiver)
@@ -436,6 +494,22 @@ mod tests {
             end: 0.0,
             lead_in: 0.0,
             samples,
+        }
+    }
+
+    #[test]
+    fn automatic_threads_respect_available_cpus_and_native_limits() {
+        for (available, cpu, gpu) in [
+            (1, 1, 1),
+            (2, 2, 1),
+            (6, 6, 4),
+            (28, 8, 26),
+            (512, 8, 510),
+            (515, 8, 512),
+            (1024, 8, 512),
+        ] {
+            assert_eq!(automatic_threads(false, available), cpu);
+            assert_eq!(automatic_threads(true, available), gpu);
         }
     }
 
@@ -508,6 +582,231 @@ mod tests {
         drop(transcriber);
         let lengths = tokio::time::timeout(Duration::from_secs(10), worker).await;
         assert_eq!(lengths.unwrap().unwrap(), [480_000]);
+    }
+
+    #[tokio::test]
+    async fn prepares_the_next_batch_before_the_current_batch_finishes() {
+        let (mut recognizer, _) = fake_recognizer();
+        recognizer.batch_size = 4;
+        let (sender, mut receiver) = mpsc::channel(4);
+        recognizer.requests = sender;
+        let worker = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            // Hold the first four answers until the next four requests arrive.
+            // With only one batch in flight, this can never finish.
+            for _ in 0..8 {
+                requests.push(receiver.recv().await.unwrap());
+            }
+            for request in requests.into_iter().rev() {
+                request
+                    .reply
+                    .send(Ok(Recognition::text(format!("chunk {}", request.chunk.0))))
+                    .unwrap();
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audio.wav");
+        std::fs::write(&path, chunk(vec![0; 8 * SAMPLE_RATE as usize]).wav_bytes()).unwrap();
+        let options = ChunkOptions {
+            max_chunk: Duration::from_secs(1),
+            merge: false,
+            padding: None,
+            resend_gaps: None,
+            ..ChunkOptions::default()
+        };
+        let windows = FixedWindows::new(Duration::from_secs(1)).unwrap();
+        let transcriber = ChunkedTranscriber::new(windows, recognizer, options).unwrap();
+        let segments = tokio::time::timeout(
+            Duration::from_secs(10),
+            transcriber.transcribe(&path, &NoProgress),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(),
+            (0..8).map(|i| format!("chunk {i}")).collect::<Vec<_>>()
+        );
+        worker.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_request_waiting_for_capacity_does_not_block_the_queue() {
+        let (mut recognizer, _) = fake_recognizer();
+        let (sender, mut receiver) = mpsc::channel(1);
+        recognizer.requests = sender;
+        let audio = chunk(vec![1; MIN_SAMPLES]);
+        let mut first = Box::pin(recognizer.recognize(&audio));
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(std::future::Future::poll(
+                first.as_mut(),
+                cx
+            )))
+            .await
+            .is_pending()
+        );
+        let mut waiting = Box::pin(recognizer.recognize(&audio));
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(std::future::Future::poll(
+                waiting.as_mut(),
+                cx
+            )))
+            .await
+            .is_pending()
+        );
+        drop(waiting);
+        let request = receiver.recv().await.unwrap();
+        request.reply.send(Ok(Recognition::text("first"))).unwrap();
+        assert_eq!(first.await.unwrap(), Recognition::text("first"));
+        let mut next = Box::pin(recognizer.recognize(&audio));
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(std::future::Future::poll(
+                next.as_mut(),
+                cx
+            )))
+            .await
+            .is_pending()
+        );
+        let request = receiver
+            .try_recv()
+            .expect("cancelled waiter must release capacity");
+        request.reply.send(Ok(Recognition::text("next"))).unwrap();
+        assert_eq!(next.await.unwrap(), Recognition::text("next"));
+    }
+
+    #[tokio::test]
+    async fn callers_wait_for_queue_capacity_before_converting_pcm() {
+        PCM_CONVERSIONS.set(0);
+        let (mut recognizer, _) = fake_recognizer();
+        let (sender, _receiver) = mpsc::channel(1);
+        recognizer.requests = sender;
+        let audio = chunk(vec![1; MIN_SAMPLES]);
+        let mut queued = Box::pin(recognizer.recognize(&audio));
+        let mut waiting = Box::pin(recognizer.recognize(&audio));
+        for future in [&mut queued, &mut waiting] {
+            let poll = std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(std::future::Future::poll(future.as_mut(), cx))
+            })
+            .await;
+            assert!(poll.is_pending());
+        }
+        assert_eq!(PCM_CONVERSIONS.get(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn worker_stopping_during_pcm_conversion_does_not_hang() {
+        let (recognizer, receiver) = fake_recognizer();
+        ON_PCM_CONVERSION.set(Some(Box::new(move || drop(receiver))));
+        let audio = chunk(vec![1; MIN_SAMPLES]);
+        let error = tokio::time::timeout(Duration::from_secs(1), recognizer.recognize(&audio))
+            .await
+            .expect("a stopped worker must not leave its caller waiting")
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<CohereError>(),
+            Some(CohereError::WorkerStopped)
+        ));
+        assert!(recognizer.requests.is_closed());
+    }
+
+    #[tokio::test]
+    async fn completed_reply_is_preserved_when_the_worker_exits() {
+        // Covers replies through the first select arm. Preserving a reply delivered between
+        // branch polls is a cross-thread race this current-thread test cannot schedule.
+        for success in [true, false] {
+            let (recognizer, mut receiver) = fake_recognizer();
+            let worker = tokio::spawn(async move {
+                let request = receiver.recv().await.unwrap();
+                let answer = if success {
+                    Ok(Recognition::text("completed"))
+                } else {
+                    Err(CohereError::Config("inference failed".into()))
+                };
+                request.reply.send(answer).unwrap();
+                drop(receiver);
+            });
+            let answer = recognizer.recognize(&chunk(vec![1; MIN_SAMPLES])).await;
+            if success {
+                assert_eq!(answer.unwrap(), Recognition::text("completed"));
+            } else {
+                assert!(matches!(
+                    answer.unwrap_err().downcast_ref::<CohereError>(),
+                    Some(CohereError::Config(message)) if message == "inference failed"
+                ));
+            }
+            worker.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn overlapping_files_keep_their_own_ordered_results() {
+        let (mut recognizer, mut receiver) = fake_recognizer();
+        recognizer.batch_size = 2;
+        let worker = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for _ in 0..8 {
+                requests.push(receiver.recv().await.unwrap());
+            }
+            for request in requests.into_iter().rev() {
+                let label = if request.pcm[0] > 0.0 {
+                    "positive"
+                } else {
+                    "negative"
+                };
+                request
+                    .reply
+                    .send(Ok(Recognition::text(format!(
+                        "{label} {}",
+                        request.chunk.0
+                    ))))
+                    .unwrap();
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let positive = directory.path().join("positive.wav");
+        let negative = directory.path().join("negative.wav");
+        std::fs::write(
+            &positive,
+            chunk(vec![1; 4 * SAMPLE_RATE as usize]).wav_bytes(),
+        )
+        .unwrap();
+        std::fs::write(
+            &negative,
+            chunk(vec![-1; 4 * SAMPLE_RATE as usize]).wav_bytes(),
+        )
+        .unwrap();
+        let options = ChunkOptions {
+            max_chunk: Duration::from_secs(1),
+            merge: false,
+            padding: None,
+            resend_gaps: None,
+            ..ChunkOptions::default()
+        };
+        let transcriber = ChunkedTranscriber::new(
+            FixedWindows::new(Duration::from_secs(1)).unwrap(),
+            recognizer,
+            options,
+        )
+        .unwrap();
+        let results = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(
+                transcriber.transcribe(&positive, &NoProgress),
+                transcriber.transcribe(&negative, &NoProgress)
+            )
+        })
+        .await
+        .unwrap();
+        for (result, label) in [(results.0, "positive"), (results.1, "negative")] {
+            assert_eq!(
+                result
+                    .unwrap()
+                    .iter()
+                    .map(|segment| segment.text.clone())
+                    .collect::<Vec<_>>(),
+                (0..4).map(|i| format!("{label} {i}")).collect::<Vec<_>>()
+            );
+        }
+        worker.await.unwrap();
     }
 
     #[test]

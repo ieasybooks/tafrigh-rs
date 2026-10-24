@@ -1,0 +1,13 @@
+--- a/src/arch/cohere/cohere.h
++++ b/src/arch/cohere/cohere.h
+@@ -169,8 +169,8 @@
+     std::vector<float> pos_div_term;
+     std::vector<float> enc_host;
+ 
+-    // Flash-attn is per-stage: encoder dk=160 has no Metal flash_attn_ext
+-    // kernel (default OFF on Metal; manual path ties anyway); decoder
++    // Flash-attn is per-stage: encoder dk=160 has no Metal or CUDA kernel
++    // (default OFF on those backends); decoder
+     // dk=128 works everywhere (default ON). TRANSCRIBE_NO_FLASH /
+     // TRANSCRIBE_FORCE_FLASH apply to both stages at once.
+     bool encoder_use_flash = true;

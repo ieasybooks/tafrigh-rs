@@ -60,6 +60,10 @@ Models are kept in `tafrigh/models` in the user cache folder: `$XDG_CACHE_HOME` 
 
 `--device auto`, the default, uses the GPU this build supports when it works, and the CPU otherwise. `--device cpu` forces the CPU, `--device gpu` fails without a GPU, and `--device gpu:N` picks one of several GPUs, counting from 0. A log line at the start shows where the model runs.
 
+One process shares its loaded model across all input files. `--cohere-batch-size` controls the maximum GPU batch (1–64, default 8); larger batches and longer chunks use more memory. Audio for the next batch can be prepared while the current batch runs, with a bounded queue. CPU inference processes one chunk at a time. The CLI processes at most two files concurrently, so one-chunk files cannot fill batches larger than two; larger batches chiefly help recordings that produce many chunks.
+
+`--threads` controls native inference threads. Omitted or 0 selects automatically: available CPU parallelism minus two on GPU (at least one), or up to eight threads on CPU, capped at the native limit of 512. Available parallelism uses Rust's estimate, including affinity and supported container CPU quotas; if it cannot be determined, the fallback is one. CPU automatic selection now respects that estimate instead of the native runtime's affinity-only count. Explicit CLI values cannot exceed available parallelism or 512. Single-chunk mel preprocessing and other pipeline work use their own threads, so this is not a process-wide thread cap. The startup log shows the actual device, maximum batch size and native inference thread count, including after an automatic fallback to CPU.
+
 | Build | GPU |
 |---|---|
 | macOS arm64 archive | Metal |
@@ -207,7 +211,40 @@ Times depend on how busy Wit is. These runs sent WAV. With Opus, the default sin
 
 ### Cohere
 
-Measured on a GeForce GTX 1660 SUPER (6 GB) with a 6-core Intel Core i5-8500, against [cohere-transcribe](https://github.com/AliOsm/cohere-transcribe) 0.1.4, a Python package for the same model. The lecture is the 69-minute [Arabic grammar lecture](https://www.youtube.com/watch?v=Cdle09QLPLI) from cohere-transcribe's own benchmarks. Errors are measured on 500 Arabic clips (79 min), 100 each from FLEURS, Common Voice 18, SADA22, Casablanca and a Quran recitation corpus, with the text normalization from cohere-transcribe's benchmarks. Lecture times are medians of three fresh runs, including start-up and model loading; tafrigh's 500-clip times are single runs.
+#### GTX 1660 SUPER review measurements
+
+The [review of the performance stack at `9ffd7f7`](https://github.com/ieasybooks/tafrigh-rs/pull/44#issuecomment-6373249159) reports the following on a GTX 1660 SUPER (6 GiB), Core i5-8500 and CUDA 12.9. It uses the public [69-minute Arabic grammar lecture](https://www.youtube.com/watch?v=Cdle09QLPLI) and the 500-clip, five-source corpus described below, with the CLI defaults including `--pad 0.5`. These are reviewer measurements, not reruns of the revised commit. Lecture times are medians of three passes; clip accuracy is one pass per setting.
+
+| Setting | Lecture, main → stack | WER, main → stack | CER, main → stack |
+|---|---:|---:|---:|
+| Q8_0, batch 8, automatic threads | 259.6 → 156.2 s | 24.43% → 24.40% | 12.60% → 12.60% |
+| Q4_K_M, batch 8, automatic threads | 253.2 → 154.3 s | 24.64% → 24.59% | 12.70% → 12.60% |
+
+Q8_0 took 286.8 → 194.1 seconds for the 500 clips, with lecture GPU use of 2,948 → 3,000 MiB. Paired 95% intervals for WER changes span zero: −0.17 to +0.09 percentage points for Q8_0 and −0.23 to +0.18 for Q4_K_M. The same 12 hard clips were empty in both builds. Batch 8 balanced speed and memory on this GPU; larger batches did not help. These results do not establish accuracy equivalence on every recording.
+
+#### RTX 4070 measurements
+
+On an RTX 4070 (12 GiB) and Core i7-14700F, 16 private recordings totaling 7.33 audio hours gave these times, including process startup, model loading, FFmpeg decoding, VAD, inference and output writing. All runs below use `--pad 0`, rather than the CLI default of 0.5 seconds on each side:
+
+| Build and settings | GPU processes | Seconds per audio hour |
+|---|---:|---:|
+| Original 0.4.0, Q8_0, batch 8, automatic CPU threads | 1 | 58.00 |
+| Current Q8_0, batch 8, automatic CPU threads | 1 | 13.52 |
+| Original 0.4.0, BF16, batch 8 per process, automatic CPU threads | 2 | 47.02 |
+| Current BF16, batch 32, 8 CPU threads | 1 | 12.12 |
+
+These are medians of three passes except the original Q8_0 baseline, which is one pass. The BF16 comparison changes process count and tuning as well as the implementation. Downloads and application imports are excluded. See the [benchmark report](https://github.com/ieasybooks/tafrigh-rs/blob/main/docs/benchmarks/cohere-cuda-2026-10-23.md) for the settings, accuracy checks on 428 human-transcribed FLEURS clips, reproducible error-count calculations, output checks and limits. Benchmark artifacts are kept in the repository rather than the published CLI crate.
+
+Q8_0, batch 8 and automatic threads remain the defaults. To try the measured BF16 tuning on a GPU with enough memory:
+
+```sh
+tafrigh recordings/ --transcriber cohere --device gpu --model bf16 \
+  --cohere-batch-size 32 --threads 8
+```
+
+#### Earlier GTX 1660 SUPER benchmark
+
+The following measurements compare tafrigh 0.4.0, before the CUDA fixes, with [cohere-transcribe](https://github.com/AliOsm/cohere-transcribe) 0.1.4, a Python package for the same model. They use the same lecture and 500 clips as the GTX 1660 SUPER review measurements above, but come from an earlier session. The [follow-up review](https://github.com/ieasybooks/tafrigh-rs/pull/44#issuecomment-6376403619) reports timing drift of about 3% on this machine; compare rows within each table. These runs used a GeForce GTX 1660 SUPER (6 GB) with a 6-core Intel Core i5-8500. The lecture is the 69-minute [Arabic grammar lecture](https://www.youtube.com/watch?v=Cdle09QLPLI) from cohere-transcribe's own benchmarks. Errors are measured on 500 Arabic clips (79 min), 100 each from FLEURS, Common Voice 18, SADA22, Casablanca and a Quran recitation corpus, with the text normalization from cohere-transcribe's benchmarks. Lecture times are medians of three fresh runs, including start-up and model loading; tafrigh's 500-clip times are single runs.
 
 | | Lecture | 500 clips | Word errors | Character errors | GPU memory |
 |---|---|---|---|---|---|
@@ -250,11 +287,13 @@ let segments = transcriber.transcribe("lecture.mp3".as_ref(), &NoProgress).await
 
 Cohere returns punctuated text with one segment per chunk and no word timings. Audio including padding must be shorter than 400 seconds: transcribe.cpp advertises 400 but rejects exactly that, so the limit is one sample less. Chunks shorter than 10 ms, which the model can't accept, give no text. The normal 15-second chunk policy still applies. GPU builds use Metal on Apple or the crate's `cuda` feature on NVIDIA; CPU works elsewhere. `Device::Auto` attempts the available GPU and retries loading on CPU if needed, `Device::Cpu` selects CPU, and `Device::Gpu` requires a GPU. `Device::GpuIndex(N)` selects the zero-based Nth GPU in transcribe.cpp's GPU list and fails if unavailable. `backend()` and `device_name()` show the actual choice. Model or session load failures can trigger automatic CPU fallback; inference failures are reported.
 
-CUDA builds need the NVIDIA CUDA toolkit and its runtime libraries. CMake locates them through its normal toolkit search, including `CUDAToolkit_ROOT` or `CUDA_PATH` for a nonstandard installation. The crate supplies the CUDA runtime, cuBLAS and driver link dependencies omitted by transcribe-cpp-sys 0.4.0's static-library manifest. Cross-compilation and custom static CUDA-runtime configurations are not validated.
+CUDA builds need the NVIDIA CUDA toolkit and its runtime libraries. CMake locates them through its normal toolkit search, including `CUDAToolkit_ROOT` or `CUDA_PATH` for a nonstandard installation. The [`tafrigh-transcribe`](../crates/tafrigh-transcribe) package bundles the pinned native source, Rust bindings and local CUDA patches; ordinary builds need no separate transcribe.cpp installation. It also supplies the CUDA runtime, cuBLAS and driver link dependencies omitted by the upstream static-library manifest. Cross-compilation and custom static CUDA-runtime configurations are not validated.
 
 Concurrent Cohere calls share one session and collect into batches up to `CohereConfig::batch_size` (8 by default); a partial batch flushes after `batch_wait` (10 ms). CPU runs one request at a time. A larger GPU batch needs more memory and can change numerical results. When the model repeats itself or reaches its token limit, the chunk keeps the text produced until then (transcribe.cpp drops the repeats) and a warning is logged. The small `cargo run -p tafrigh-cohere --release --example transcribe -- MODEL.gguf OUTPUT_DIR INPUT...` example writes text for files and folders using Silero and the core pipeline; add `--device gpu`, `--batch-size 8`, `--threads 4`, or `--chunk-seconds 30 --merge` to compare settings.
 
 Model names are `bf16`, `f16`, `q8_0` (the default), `q6_k`, `q5_k_m` and `q4_k_m`. `CohereConfig::default()` selects Q8_0; `CohereConfig::new("/path/to/model.gguf")` uses an existing file directly. Downloaded variants come from the ungated `handy-computer/cohere-transcribe-arabic-07-2026-gguf` repository at the immutable `MODEL_REVISION`, with each file's SHA-256 and size pinned in code. Weights are Apache-2.0 and are not bundled in binaries.
+
+On CPU and Metal, the native runtime can memory-map model weights. Keep the model file unchanged while tafrigh uses it; replace it through a new file and rename instead of overwriting it in place. The built-in downloader already writes a temporary file and renames it.
 
 The default model directory is `$XDG_CACHE_HOME/tafrigh/models` on Linux (falling back to `~/.cache/tafrigh/models`) or `~/Library/Caches/tafrigh/models` on macOS. Set `config.model_dir = Some(path)` to override it; there is no tafrigh-specific cache environment variable. Files live under `cohere-transcribe-arabic-07-2026/`. Downloads stream to `<file>.part`, verify size and SHA-256, then rename into place. A per-file lock coordinates concurrent processes. Failed downloads remove the partial file; a partial file left by process cancellation is restarted on the next attempt. An existing final file with the right size skips downloading and rehashing. Remove that file to force a fresh verified download if it was modified.
 
@@ -280,6 +319,7 @@ YouTube validation, track selection, JSON3 parsing and word timings live in `taf
 | [`tafrigh`](https://crates.io/crates/tafrigh) | the core: decoding, Silero VAD, chunking, output formats |
 | [`tafrigh-wit`](https://crates.io/crates/tafrigh-wit) | the Wit.ai recognizer |
 | [`tafrigh-cohere`](../crates/tafrigh-cohere) | local Cohere Transcribe Arabic through transcribe.cpp |
+| [`tafrigh-transcribe`](../crates/tafrigh-transcribe) | pinned native runtime and bindings with local CUDA fixes |
 | [`tafrigh-youtube`](../crates/tafrigh-youtube) | existing YouTube captions through yt-dlp |
 | [`tafrigh-cli`](https://crates.io/crates/tafrigh-cli) | the `tafrigh` command |
 
@@ -296,7 +336,7 @@ The Rust version is pinned in `rust-toolchain.toml`. Run `mise install` from the
 
 ffmpeg tracks the latest stable release, while yt-dlp tracks the latest [official nightly build](https://github.com/yt-dlp/yt-dlp#update-channels), including prereleases, through a mise backend alias. Run `mise upgrade ffmpeg yt-dlp` to update installed copies; the other tools keep their configured version requirements. CI installs the same media tools through mise.
 
-The root package is `tafrigh-cli`, with its source in `src/`. The `tafrigh`, `tafrigh-wit`, `tafrigh-youtube` and `tafrigh-cohere` libraries live under `crates/`. All five packages are workspace members and are selected by default when running Cargo from the root. Cohere builds require CMake and a C++ compiler; tests use a real model only when `TAFRIGH_TEST_COHERE_MODEL=/path/to/model.gguf` is set. See [AGENTS.md](../AGENTS.md) for verification commands and project conventions.
+The root package is `tafrigh-cli`, with its source in `src/`. The `tafrigh`, `tafrigh-wit`, `tafrigh-youtube`, `tafrigh-cohere` and `tafrigh-transcribe` libraries live under `crates/`. All six packages are workspace members and are selected by default when running Cargo from the root. Cohere builds require CMake and a C++ compiler; tests use a real model only when `TAFRIGH_TEST_COHERE_MODEL=/path/to/model.gguf` is set. See [AGENTS.md](../AGENTS.md) for verification commands and project conventions.
 
 After changing the CLI, regenerate `docs/cli.md` and `docs/tafrigh.1` from the repository root:
 

@@ -201,6 +201,12 @@ Where the model runs: auto (this build's GPU when it works, otherwise the CPU), 
 \fIDefault: \fRauto
 .RE
 .TP
+\fB\-\-cohere\-batch\-size\fR \fI<N>\fR
+Maximum chunks in a Cohere GPU batch (1–64; default 8). CPU processes one at a time.
+.TP
+\fB\-\-threads\fR \fI<N>\fR
+Native inference threads, at most the available CPU parallelism and 512. Omitted or 0: GPU uses available CPUs minus two (at least one); CPU uses at most eight.
+.TP
 \fB\-\-model\-dir\fR \fI<DIR>\fR
 Where downloaded models are kept [default: tafrigh/models in the user cache folder, such as ~/.cache/tafrigh/models on Linux or ~/Library/Caches/tafrigh/models on macOS].
 .TP

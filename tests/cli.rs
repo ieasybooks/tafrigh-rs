@@ -415,13 +415,20 @@ fn unknown_options_are_rejected_for_both_backends() {
 
 #[test]
 fn local_model_options_are_rejected_by_wit_and_youtube() {
+    let dir = tempfile::tempdir().unwrap();
     for (transcriber, required) in [("wit", ["-w", "test"]), ("youtube", ["-l", "ar"])] {
-        for option in ["--model", "--device", "--model-dir"] {
+        for (option, value) in [
+            ("--model", "x"),
+            ("--device", "x"),
+            ("--model-dir", "x"),
+            ("--cohere-batch-size", "16"),
+            ("--threads", "1"),
+        ] {
             let output = command()
                 .env("PATH", "")
                 .args(["https://youtu.be/video", "--transcriber", transcriber])
                 .args(required)
-                .args([option, "x"])
+                .args([option, value])
                 .output()
                 .unwrap();
             assert_eq!(
@@ -437,6 +444,19 @@ fn local_model_options_are_rejected_by_wit_and_youtube() {
                 "{option}: {}",
                 stderr(&output)
             );
+            std::fs::write(dir.path().join("models.args"), format!("{option} {value}")).unwrap();
+            let from_file = command()
+                .current_dir(dir.path())
+                .env("PATH", "")
+                .args(["https://youtu.be/video", "--transcriber", transcriber])
+                .args(required)
+                .arg("@models.args")
+                .output()
+                .unwrap();
+            assert_eq!(from_file.status.code(), Some(2));
+            assert!(stderr(&from_file).contains(&format!(
+                "'{option}': isn't used by --transcriber {transcriber}"
+            )));
         }
     }
 }
@@ -489,6 +509,15 @@ fn cohere_rejects_unusable_options_before_loading_a_model() {
         ),
         (vec!["--device", "tpu"], "expected auto, cpu, gpu or gpu:N"),
         (vec!["--device", "gpu:"], "expected auto, cpu, gpu or gpu:N"),
+        (vec!["--cohere-batch-size", "0"], "must be between 1 and 64"),
+        (
+            vec!["--cohere-batch-size", "65"],
+            "must be between 1 and 64",
+        ),
+        (
+            vec!["--threads", "513"],
+            "limited by available CPU parallelism and the native limit",
+        ),
         (
             vec!["--model", "missing.gguf"],
             "expected a variant (bf16, f16, q8_0, q6_k, q5_k_m, q4_k_m) or an existing .gguf file",
@@ -537,6 +566,10 @@ fn cohere_accepts_its_options_and_checks_ffmpeg_before_loading_a_model() {
         "cpu",
         "--model-dir",
         model_dir.path().to_str().unwrap(),
+        "--cohere-batch-size",
+        "24",
+        "--threads",
+        "1",
         "-l",
         "en",
         "--merge",
@@ -552,6 +585,20 @@ fn cohere_accepts_its_options_and_checks_ffmpeg_before_loading_a_model() {
         stderr(&output)
     );
     assert_eq!(std::fs::read_dir(model_dir.path()).unwrap().count(), 0);
+}
+
+#[cfg(feature = "cohere")]
+#[test]
+fn cohere_threads_reject_oversubscription_before_tool_checks() {
+    let available = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let output = cohere(&["--threads", &(available + 1).to_string()]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(stderr(&output).contains("limited by available CPU parallelism"));
+    for threads in ["0", "1"] {
+        let output = cohere(&["--threads", threads]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(stderr(&output).contains("a required program is unavailable"));
+    }
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # Native dependency notices
 
-The `tafrigh-cohere` crate statically links transcribe.cpp 0.4.0 through its official Rust bindings. transcribe.cpp vendors ggml, miniz and Silero VAD code; all are MIT-licensed. The following authoritative notices accompany that code. Cohere Transcribe Arabic 07-2026 weights are Apache-2.0, downloaded separately, and are not bundled in tafrigh binaries. The small test audio fixture is separately attributed in `tests/fixtures/README.md`.
+The `tafrigh-cohere` crate statically links the pinned transcribe.cpp 0.4.1 source and Rust bindings through the local `tafrigh-transcribe` package, which carries the Cohere CUDA patches. The original native source and licenses are bundled in that package. transcribe.cpp vendors ggml, miniz and Silero VAD code; all are MIT-licensed. The following authoritative notices accompany that code. Cohere Transcribe Arabic 07-2026 weights are Apache-2.0, downloaded separately, and are not bundled in tafrigh binaries. The small test audio fixture is separately attributed in `tests/fixtures/README.md`.
 
 ## transcribe.cpp
 
