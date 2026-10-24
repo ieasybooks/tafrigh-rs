@@ -182,6 +182,7 @@ usage generate manpage -f tafrigh.usage.kdl > tafrigh.1
 
 - **More tokens, faster runs.** tafrigh starts one request per second per token by default; additional tokens can increase throughput. All tokens must belong to apps of the same language. Use `-l` / `--language` to set that language explicitly, or omit it to detect the language from the tokens.
 - **`--merge` for speed with Wit.** It sends fewer, longer requests. In the benchmark below, it roughly halved runtime with a small accuracy tradeoff.
+- **Quran recitation.** Silero scores some recitation, especially melodic (mujawwad) recitation, as silence, and audio it rejects never reaches the recognizer. The default `--vad-threshold` is therefore 0.15 rather than Silero's own 0.5. On 500 Arabic clips this lowered word errors from 24.4% to 22.3% with Cohere (Quran clips: 24.8% to 16.5%) and from 32.2% to 31.5–32.0% with Wit, with no text produced on 19 minutes of silence, noise and music at either setting. Even 0.15 still skips parts of melodic recitation.
 - **Interrupted?** Rerun the same command with `--skip-existing`; finished items are kept.
 - **A chunk that keeps failing** fails its file, so a rerun gives a complete transcript. `--on-chunk-error skip` leaves the chunk out instead.
 

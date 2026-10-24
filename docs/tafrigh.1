@@ -97,9 +97,9 @@ Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohe
 Merge consecutive speech up to \-\-max\-chunk: fewer requests and more context per request [default: on for cohere, off for wit]. Wit segments still follow its utterances; Cohere gives one segment per chunk.
 .TP
 \fB\-\-vad\-threshold\fR \fI<P>\fR
-Speech probability threshold.
+Speech probability threshold; speech ends below this minus 0.15 (at least 0.01). Higher values drop more audio: at 0.5, Silero misses much melodic Quran recitation.
 .RS
-\fIDefault: \fR0.5
+\fIDefault: \fR0.15
 .RE
 .TP
 \fB\-\-min\-speech\-ms\fR \fI<MS>\fR

@@ -265,8 +265,9 @@ pub struct Segmentation {
     #[usage(long, negate = "no-merge")]
     pub merge: bool,
 
-    /// Speech probability threshold.
-    #[usage(long, value_name = "P", default = "0.5")]
+    /// Speech probability threshold; speech ends below this minus 0.15 (at least 0.01). Higher
+    /// values drop more audio: at 0.5, Silero misses much melodic Quran recitation.
+    #[usage(long, value_name = "P", default = "0.15")]
     pub vad_threshold: f32,
 
     /// Shortest speech kept, in milliseconds.
