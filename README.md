@@ -85,4 +85,4 @@ See [AGENTS.md](https://github.com/ieasybooks/tafrigh-rs/blob/main/AGENTS.md) fo
 
 ## License
 
-MIT. The bundled Silero model is also MIT. Cohere builds include a pinned transcribe.cpp source bundle with local CUDA fixes and ggml, both MIT ([third-party notices](crates/tafrigh-cohere/THIRD-PARTY-LICENSES.md)). The Cohere weights are Apache-2.0 and are downloaded, not bundled.
+MIT. The bundled Silero model is also MIT; the bundled FireRedVAD model and normalization statistics are Apache-2.0 ([sources and licenses](crates/tafrigh/assets/NOTICE.firered-vad.md)). Cohere builds include a pinned transcribe.cpp source bundle with local CUDA fixes and ggml, both MIT ([third-party notices](crates/tafrigh-cohere/THIRD-PARTY-LICENSES.md)). The Cohere weights are Apache-2.0 and are downloaded, not bundled.
