@@ -14,10 +14,9 @@ use crate::{CohereConfig, CohereError, Device, DownloadProgress, MAX_THREADS};
 
 /// One sample at 16 kHz, in nanoseconds.
 const SAMPLE_NANOS: u64 = 1_000_000_000 / SAMPLE_RATE as u64;
-/// The longest audio the model accepts per call, padding included: one sample under 400 s.
-/// transcribe.cpp advertises 400 s, but its mel frontend adds a centered frame, so exactly
-/// 400 s needs one encoder frame more than the model's 5,000.
-pub const MAX_AUDIO_DURATION: Duration = Duration::from_nanos(400_000_000_000 - SAMPLE_NANOS);
+/// The longest supported audio per call, padding included: 30 s plus 0.5 s on each side.
+/// Longer input can silently lose text even below transcribe.cpp's encoder capacity.
+pub const MAX_AUDIO_DURATION: Duration = Duration::from_secs(31);
 /// The fewest samples the model accepts: its mel frontend needs two frames, one per 160-sample
 /// hop plus the centered one. A shorter chunk lasts under 10 ms, too short for any speech.
 const MIN_SAMPLES: usize = 160;
@@ -513,15 +512,62 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn accepts_exactly_31_seconds_but_rejects_one_more_sample_before_queueing() {
+        let (recognizer, mut receiver) = fake_recognizer();
+        assert_eq!(
+            recognizer.max_audio_duration(),
+            Some(Duration::from_secs(31))
+        );
+        let samples = 31 * SAMPLE_RATE as usize;
+        let boundary = chunk(vec![0; samples]);
+        let worker = tokio::spawn(async move {
+            let request = receiver.recv().await.unwrap();
+            assert_eq!(request.pcm.len(), samples);
+            request.reply.send(Ok(Recognition::text("نص"))).unwrap();
+        });
+        assert_eq!(
+            recognizer.recognize(&boundary).await.unwrap(),
+            Recognition::text("نص")
+        );
+        worker.await.unwrap();
+
+        // The closed queue would return WorkerStopped if this reached inference.
+        let error = recognizer
+            .recognize(&chunk(vec![0; samples + 1]))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Cohere limit of 31s"), "{error}");
+    }
+
     #[test]
-    fn the_audio_limit_is_one_sample_under_what_the_encoder_holds() {
-        // transcribe.cpp's frame counts: one mel frame per 160 samples plus a centered one,
-        // then an encoder that halves them three times, rounding up, and holds 5,000.
-        let encoder_frames = |samples: usize| (samples / 160 + 1).div_ceil(8);
-        let max = samples_in(MAX_AUDIO_DURATION);
-        assert_eq!(max, 6_399_999);
-        assert_eq!(encoder_frames(max), 5_000);
-        assert_eq!(encoder_frames(max + 1), 5_001);
+    fn chunking_accepts_30_seconds_with_default_padding_and_rejects_more() {
+        let (recognizer, _receiver) = fake_recognizer();
+        let window = Duration::from_secs(30);
+        let mut options = tafrigh::ChunkOptions {
+            max_chunk: window,
+            resend_gaps: None,
+            ..tafrigh::ChunkOptions::default()
+        };
+        assert!(
+            tafrigh::ChunkedTranscriber::new(
+                FixedWindows::new(window).unwrap(),
+                recognizer.clone(),
+                options.clone(),
+            )
+            .is_ok()
+        );
+        options.max_chunk += Duration::from_nanos(SAMPLE_NANOS);
+        let error = tafrigh::ChunkedTranscriber::new(
+            FixedWindows::new(window).unwrap(),
+            recognizer,
+            options,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("recognizer's 31s limit"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

@@ -523,17 +523,17 @@ fn cohere_rejects_unusable_options_before_loading_a_model() {
             "expected a variant (bf16, f16, q8_0, q6_k, q5_k_m, q4_k_m) or an existing .gguf file",
         ),
         (
-            vec!["--max-chunk", "400"],
-            "exceeds the 399.9999375s Cohere audio limit",
+            vec!["--max-chunk", "32"],
+            "exceeds the 31s Cohere audio limit",
         ),
         (
-            vec!["--vad", "none", "--max-chunk", "400", "--pad", "0"],
-            "exceeds the 399.9999375s Cohere audio limit",
+            vec!["--vad", "none", "--max-chunk", "31.0000625", "--pad", "0"],
+            "exceeds the 31s Cohere audio limit",
         ),
-        // 7,999.5 samples of padding round up to 8,000 on each side: one sample over the limit.
+        // 8,000.5 samples of padding round up to 8,001 on each side, exceeding 31 s.
         (
-            vec!["--vad", "none", "--max-chunk", "399", "--pad", "0.49996875"],
-            "exceeds the 399.9999375s Cohere audio limit",
+            vec!["--vad", "none", "--max-chunk", "30", "--pad", "0.50003125"],
+            "exceeds the 31s Cohere audio limit",
         ),
         (
             vec!["--wit-audio", "wav"],
@@ -549,6 +549,26 @@ fn cohere_rejects_unusable_options_before_loading_a_model() {
         );
         assert!(
             stderr(&output).contains(expected),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[cfg(feature = "cohere")]
+#[test]
+fn cohere_accepts_chunk_settings_at_the_limit_including_padding() {
+    for args in [
+        vec![],
+        vec!["--max-chunk", "30", "--pad", "0.5"],
+        vec!["--vad", "none", "--max-chunk", "31", "--pad", "0"],
+        vec!["--max-chunk", "29", "--pad", "1"],
+    ] {
+        let output = cohere(&args);
+        // Parsing succeeds and reaches the tool check, without loading a model.
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("a required program is unavailable"),
             "{args:?}: {}",
             stderr(&output)
         );

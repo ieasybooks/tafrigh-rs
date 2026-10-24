@@ -255,7 +255,8 @@ pub struct Segmentation {
     pub vad: Vad,
 
     /// Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohere].
-    /// Wit allows up to 60 on dictation and 20 on speech, Cohere under 400, padding included.
+    /// Wit allows up to 60 on dictation and 20 on speech, Cohere up to 31, padding included.
+    /// Longer Cohere chunks can silently lose text. With the default --pad 0.5, use at most 30.
     #[usage(long, value_name = "SECONDS")]
     pub max_chunk: Option<f64>,
 

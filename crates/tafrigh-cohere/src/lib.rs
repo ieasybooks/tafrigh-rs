@@ -4,7 +4,9 @@
 //! [`CohereRecognizer`] implements [`tafrigh::ChunkRecognizer`]. It accepts mono 16 kHz
 //! PCM chunks and returns punctuated Arabic or English text without word timings. Decoding,
 //! Silero VAD, padding and output formats stay in tafrigh. Disable gap resends when constructing
-//! a [`tafrigh::ChunkedTranscriber`]. Each recognized chunk becomes one segment.
+//! a [`tafrigh::ChunkedTranscriber`]. Each recognized chunk becomes one segment. Chunks,
+//! including padding, must not exceed [`MAX_AUDIO_DURATION`] (31 seconds); longer input
+//! can silently lose text in the model even though the native encoder accepts it.
 //!
 //! Concurrent requests share one model and session. GPU requests are collected into bounded
 //! batches; CPU requests run individually. Loading and inference run on blocking threads.

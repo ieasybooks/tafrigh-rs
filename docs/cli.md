@@ -83,7 +83,7 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
   **Choices:** `silero`, `none`
 
   **Default:** `silero`
-- **`--max-chunk <SECONDS>`** — Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohere]. Wit allows up to 60 on dictation and 20 on speech, Cohere under 400, padding included.
+- **`--max-chunk <SECONDS>`** — Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohere]. Wit allows up to 60 on dictation and 20 on speech, Cohere up to 31, padding included. Longer Cohere chunks can silently lose text. With the default --pad 0.5, use at most 30.
 - **`--merge`** — Merge consecutive speech up to --max-chunk: fewer requests and more context per request [default: on for cohere, off for wit]. Wit segments still follow its utterances; Cohere gives one segment per chunk.
 - **`--vad-threshold <P>`** — Speech probability threshold; speech ends below this minus 0.15 (at least 0.01). Higher values drop more audio: at 0.5, Silero misses much melodic Quran recitation.
 
