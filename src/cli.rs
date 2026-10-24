@@ -266,10 +266,10 @@ pub struct Segmentation {
     #[usage(long, negate = "no-merge")]
     pub merge: bool,
 
-    /// Speech probability threshold; speech ends below this minus 0.15 (at least 0.01). Higher
-    /// values drop more audio: at 0.5, Silero misses much melodic Quran recitation.
-    #[usage(long, value_name = "P", default = "0.15")]
-    pub vad_threshold: f32,
+    /// Speech probability threshold [default: 0.15 for silero, 0.4 for firered]; speech ends
+    /// below this minus 0.15 (at least 0.01). At 0.5, Silero misses much melodic recitation.
+    #[usage(long, value_name = "P")]
+    pub vad_threshold: Option<f32>,
 
     /// Shortest speech kept, in milliseconds.
     #[usage(long, value_name = "MS", default = "500")]
@@ -308,6 +308,8 @@ pub struct Segmentation {
 pub enum Vad {
     /// Silero VAD v6; long speech is split at its longest pause.
     Silero,
+    /// Streaming FireRedVAD; useful for recitation missed by Silero.
+    Firered,
     /// Fixed windows of --max-chunk seconds, no voice detection.
     None,
 }

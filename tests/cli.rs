@@ -219,6 +219,7 @@ fn wit_options_are_rejected_by_youtube_even_when_the_value_is_a_default() {
         (&["-qr"], "--recursive"),
         (&["--no-recursive"], "--recursive"),
         (&["--vad", "silero"], "--vad"),
+        (&["--vad", "firered"], "--vad"),
         (&["--max-chunk=15.0"], "--max-chunk"),
         (&["--merge"], "--merge"),
         (&["--no-merge"], "--merge"),

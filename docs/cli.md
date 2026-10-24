@@ -80,14 +80,12 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
 ### Segmentation
 - **`--vad <VAD>`** — How to find speech.
 
-  **Choices:** `silero`, `none`
+  **Choices:** `silero`, `firered`, `none`
 
   **Default:** `silero`
 - **`--max-chunk <SECONDS>`** — Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohere]. Wit allows up to 60 on dictation and 20 on speech, Cohere up to 31, padding included. Longer Cohere chunks can silently lose text. With the default --pad 0.5, use at most 30.
 - **`--merge`** — Merge consecutive speech up to --max-chunk: fewer requests and more context per request [default: on for cohere, off for wit]. Wit segments still follow its utterances; Cohere gives one segment per chunk.
-- **`--vad-threshold <P>`** — Speech probability threshold; speech ends below this minus 0.15 (at least 0.01). Higher values drop more audio: at 0.5, Silero misses much melodic Quran recitation.
-
-  **Default:** `0.15`
+- **`--vad-threshold <P>`** — Speech probability threshold [default: 0.15 for silero, 0.4 for firered]; speech ends below this minus 0.15 (at least 0.01). At 0.5, Silero misses much melodic recitation.
 - **`--min-speech-ms <MS>`** — Shortest speech kept, in milliseconds.
 
   **Default:** `500`
