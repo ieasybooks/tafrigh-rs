@@ -6,6 +6,9 @@
 #[cfg(feature = "silero")]
 pub mod silero;
 
+#[cfg(feature = "silero")]
+mod timestamps;
+
 use std::sync::Arc;
 use std::time::Duration;
 

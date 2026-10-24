@@ -7,11 +7,12 @@
 #[cfg(test)]
 mod golden_tests;
 mod model;
-mod timestamps;
 
+#[cfg(test)]
+use super::timestamps;
+use super::timestamps::{StreamingTimestamps, TimestampParams};
 use model::ProbabilityStream;
 pub use model::SileroModel;
-use timestamps::{StreamingTimestamps, TimestampParams};
 
 use std::time::Duration;
 
@@ -59,6 +60,7 @@ impl SileroConfig {
     fn timestamp_params(&self) -> TimestampParams {
         let millis = |duration: Duration| u32::try_from(duration.as_millis()).unwrap_or(u32::MAX);
         TimestampParams {
+            frame_samples: WINDOW_SAMPLES,
             threshold: self.threshold,
             min_speech_ms: millis(self.min_speech),
             max_speech_s: self.max_speech.as_secs_f64(),

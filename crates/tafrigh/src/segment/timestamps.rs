@@ -4,13 +4,14 @@
 //! 6.2.1. [`StreamingTimestamps`] produces identical spans incrementally: a span is emitted as
 //! soon as the next one starts, which is when its end padding becomes known.
 
-use super::WINDOW_SAMPLES;
 use crate::audio::SAMPLE_RATE;
 use crate::segment::SpeechSpan;
 
 /// Parameters of the Silero timestamp rules.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct TimestampParams {
+    /// Samples between consecutive frame probabilities.
+    pub frame_samples: usize,
     /// Probability at or above which a frame is speech.
     pub threshold: f32,
     /// Probability below which a frame is silence. Defaults to `threshold - 0.15` (min 0.01).
@@ -32,6 +33,7 @@ pub(super) struct TimestampParams {
 impl Default for TimestampParams {
     fn default() -> Self {
         Self {
+            frame_samples: 512,
             threshold: 0.5,
             neg_threshold: None,
             min_speech_ms: 250,
@@ -46,6 +48,7 @@ impl Default for TimestampParams {
 
 #[derive(Debug, Clone, Copy)]
 struct Derived {
+    frame_samples: usize,
     threshold: f64,
     neg_threshold: f64,
     min_speech: f64,
@@ -61,6 +64,7 @@ impl Derived {
         let sr = f64::from(SAMPLE_RATE);
         let pad = sr * f64::from(params.speech_pad_ms) / 1000.0;
         Self {
+            frame_samples: params.frame_samples,
             // Compared in f64 like the Python reference (float32 probabilities vs float).
             threshold: f64::from(params.threshold),
             neg_threshold: params
@@ -68,7 +72,7 @@ impl Derived {
                 .map_or((f64::from(params.threshold) - 0.15).max(0.01), f64::from),
             min_speech: sr * f64::from(params.min_speech_ms) / 1000.0,
             pad,
-            max_speech: sr * params.max_speech_s - WINDOW_SAMPLES as f64 - 2.0 * pad,
+            max_speech: sr * params.max_speech_s - params.frame_samples as f64 - 2.0 * pad,
             min_silence: sr * f64::from(params.min_silence_ms) / 1000.0,
             min_silence_at_max_speech: sr * f64::from(params.min_silence_at_max_speech_ms) / 1000.0,
             use_max_possible: params.use_max_possible_silence_at_max_speech,
@@ -115,7 +119,7 @@ impl Machine {
     fn step(&mut self, prob: f32, emit: &mut impl FnMut(i64, i64)) {
         let d = self.d;
         let prob = f64::from(prob);
-        let current = (WINDOW_SAMPLES * self.frame) as i64;
+        let current = (d.frame_samples * self.frame) as i64;
         self.frame += 1;
 
         if prob >= d.threshold && self.temp_end != 0 {
@@ -302,7 +306,7 @@ impl StreamingTimestamps {
     /// Lowest sample index a span not yet emitted can start at.
     pub fn retain_from(&self) -> usize {
         let pad = self.machine.d.pad.ceil() as i64;
-        let frontier = (WINDOW_SAMPLES * self.machine.frame) as i64;
+        let frontier = (self.machine.d.frame_samples * self.machine.frame) as i64;
         let mut low = frontier - pad;
         if let Some(start) = self.machine.current_start {
             low = low.min(start - pad);
@@ -338,6 +342,8 @@ impl StreamingTimestamps {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const WINDOW_SAMPLES: usize = 512;
 
     /// Deterministic pseudo-random probabilities with speech-like runs.
     fn probs(seed: u64, len: usize) -> Vec<f32> {
