@@ -2151,7 +2151,7 @@ dependencies = [
 
 [[package]]
 name = "tafrigh"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2169,7 +2169,7 @@ dependencies = [
 
 [[package]]
 name = "tafrigh-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "indicatif",
@@ -2188,7 +2188,7 @@ dependencies = [
 
 [[package]]
 name = "tafrigh-cohere"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2207,7 +2207,7 @@ dependencies = [
 
 [[package]]
 name = "tafrigh-transcribe"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cmake",
  "diffy",
@@ -2223,7 +2223,7 @@ dependencies = [
 
 [[package]]
 name = "tafrigh-wit"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -2241,7 +2241,7 @@ dependencies = [
 
 [[package]]
 name = "tafrigh-youtube"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "serde",
