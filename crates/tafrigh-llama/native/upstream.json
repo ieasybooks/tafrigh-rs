@@ -1,0 +1,83 @@
+{
+  "repository": "https://github.com/utilityai/llama-cpp-rs",
+  "version": "0.1.160",
+  "archives": [
+    {
+      "name": "llama-cpp-sys-2",
+      "archive": "llama-cpp-sys-2-0.1.160.crate",
+      "url": "https://static.crates.io/crates/llama-cpp-sys-2/llama-cpp-sys-2-0.1.160.crate",
+      "sha256": "912d8a0522acec022ae07d099366234067c8af6a18570a603f0749b7bb927e9a",
+      "commit": "0dd5814c9b061930965d144c1653cd4d05054873",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "llama-cpp-2",
+      "archive": "llama-cpp-2-0.1.160.crate",
+      "url": "https://static.crates.io/crates/llama-cpp-2/llama-cpp-2-0.1.160.crate",
+      "sha256": "b98e9f0971b7454a25a550f0bd4577f35b94570be32f8f8dc08d94f4cb2873fe",
+      "commit": "0dd5814c9b061930965d144c1653cd4d05054873",
+      "license": "MIT OR Apache-2.0"
+    }
+  ],
+  "patches": [
+    {
+      "crate": "llama-cpp-2",
+      "path": "src/mtmd.rs",
+      "patch": "patches/mtmd-parameters.patch",
+      "reason": "Expose the existing encoder flash_attn_type and warmup fields without changing native inference, and use the public sys module in the mtmd doctest."
+    },
+    {
+      "crate": "llama-cpp-2",
+      "path": "src/lib.rs",
+      "patch": "patches/no-common-lib.rs.patch",
+      "reason": "Gate common-only imports and initialize ggml logging through tafrigh-transcribe while retaining llama and mtmd tracing sinks."
+    },
+    {
+      "crate": "llama-cpp-sys-2",
+      "path": "llama.cpp/src/llama-impl.cpp",
+      "patch": "patches/ggml-logger-owner.patch",
+      "reason": "Keep ggml logging owned by tafrigh-transcribe so llama logger setup cannot replace its shared callback and user-data pair."
+    },
+    {
+      "crate": "llama-cpp-2",
+      "path": "src/log.rs",
+      "patch": "patches/ggml-log-state.patch",
+      "reason": "Remove the unused ggml tracing module because the shared sink belongs to tafrigh-transcribe."
+    },
+    {
+      "crate": "llama-cpp-2",
+      "path": "src/model/params.rs",
+      "patch": "patches/no-common-model_params.rs.patch",
+      "reason": "Gate common-only imports and implementation details when building without llama-common."
+    },
+    {
+      "crate": "llama-cpp-2",
+      "path": "src/sampling.rs",
+      "patch": "patches/no-common-sampling.rs.patch",
+      "reason": "Gate common-only imports and implementation details when building without llama-common."
+    },
+    {
+      "crate": "llama-cpp-2",
+      "path": "src/gguf/tests.rs",
+      "patch": "patches/gguf-fixture.patch",
+      "reason": "Read the upstream vocabulary fixture from the extracted archive in OUT_DIR, independently of the process working directory."
+    }
+  ],
+  "bindings_adaptations": [
+    "Replace llama_cpp_sys_2 paths with crate::sys in extracted Rust bindings.",
+    "Convert upstream lib.rs inner documentation to comments for inclusion at the crate root; the package README provides crate documentation.",
+    "Generate raw bindings from llama.cpp/mtmd headers and the ggml headers installed by tafrigh-transcribe.",
+    "Build llama and mtmd only, with LLAMA_USE_SYSTEM_GGML and the ggml_DIR exported by tafrigh-transcribe; native link dependencies belong to tafrigh-transcribe.",
+    "Allow three upstream style lints in the library shim: upper_case_acronyms, double_must_use, and unnecessary_cast for platform-dependent FFI enum types."
+  ],
+  "licenses": {
+    "LICENSE-MIT": {
+      "url": "https://raw.githubusercontent.com/utilityai/llama-cpp-rs/0dd5814c9b061930965d144c1653cd4d05054873/LICENSE-MIT",
+      "sha256": "763912bd05f42956dbfa900bd1a2f8037c704f5c64d778c623ec5952454e24aa"
+    },
+    "LICENSE-APACHE": {
+      "url": "https://raw.githubusercontent.com/utilityai/llama-cpp-rs/0dd5814c9b061930965d144c1653cd4d05054873/LICENSE-APACHE",
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+    }
+  }
+}

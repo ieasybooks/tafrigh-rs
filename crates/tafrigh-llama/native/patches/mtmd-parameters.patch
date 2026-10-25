@@ -1,0 +1,58 @@
+--- a/src/mtmd.rs
++++ b/src/mtmd.rs
+@@ -26,7 +26,7 @@
+ /// let audio_chunk = MtmdInputChunkType::Audio;
+ ///
+ /// assert_eq!(text_chunk, MtmdInputChunkType::Text);
+-/// assert_eq!(text_chunk, llama_cpp_sys_2::MTMD_INPUT_CHUNK_TYPE_TEXT.into());
++/// assert_eq!(text_chunk, llama_cpp_2::sys::MTMD_INPUT_CHUNK_TYPE_TEXT.into());
+ /// assert_ne!(text_chunk, image_chunk);
+ /// ```
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+@@ -63,6 +63,8 @@
+ ///     use_gpu: false,
+ ///     print_timings: true,
+ ///     n_threads: 4,
++///     flash_attn_type: -1,
++///     warmup: true,
+ ///     media_marker: CString::new(mtmd_default_marker()).unwrap(),
+ ///     image_min_tokens: -1,
+ ///     image_max_tokens: -1,
+@@ -76,6 +78,10 @@
+     pub print_timings: bool,
+     /// Number of threads to use for processing
+     pub n_threads: i32,
++    /// Encoder flash-attention policy: -1 auto, 0 disabled, 1 enabled.
++    pub flash_attn_type: i32,
++    /// Run the encoder warmup during initialization.
++    pub warmup: bool,
+     /// Media marker string used to identify media positions in text
+     pub media_marker: CString,
+     /// Minimum number of tokens used to represent an image.
+@@ -102,6 +108,8 @@
+             use_gpu,
+             print_timings,
+             n_threads,
++            flash_attn_type,
++            warmup,
+             media_marker,
+             image_min_tokens,
+             image_max_tokens,
+@@ -110,6 +118,8 @@
+         context.use_gpu = *use_gpu;
+         context.print_timings = *print_timings;
+         context.n_threads = *n_threads;
++        context.flash_attn_type = *flash_attn_type;
++        context.warmup = *warmup;
+         context.media_marker = media_marker.as_ptr();
+         context.image_min_tokens = *image_min_tokens;
+         context.image_max_tokens = *image_max_tokens;
+@@ -124,6 +134,8 @@
+             use_gpu: params.use_gpu,
+             print_timings: params.print_timings,
+             n_threads: params.n_threads,
++            flash_attn_type: params.flash_attn_type,
++            warmup: params.warmup,
+             media_marker: unsafe { CStr::from_ptr(params.media_marker) }.to_owned(),
+             image_min_tokens: params.image_min_tokens,
+             image_max_tokens: params.image_max_tokens,

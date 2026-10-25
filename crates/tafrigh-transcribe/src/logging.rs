@@ -1,13 +1,18 @@
 //! Routing the native log sink into the [`log`] crate facade.
 //!
-//! Call [`init_logging`] once at process startup (before loading any model) to
-//! send every library and ggml diagnostic through `log` (and thus to whatever
-//! `env_logger`/`tracing-log`/etc. the application installed). This matches the
-//! C contract: `transcribe_log_set` is a once-at-startup global.
+//! The first call to [`init_logging`] or [`disable_logging`] configures the
+//! process-wide native and ggml sink; later calls do nothing. Callers may call
+//! either function before every model load. The shared initialization completes
+//! before any caller proceeds, so model loading never replaces a running sink.
+//! With logging enabled, diagnostics go through `log` and the application's
+//! `env_logger`/`tracing-log`/etc. installation.
 
 use std::ffi::CStr;
+use std::sync::Once;
 
 use crate::sys;
+
+static LOGGING: Once = Once::new();
 
 /// The C log callback: map the level and forward the message to `log`.
 extern "C" fn log_trampoline(
@@ -34,15 +39,25 @@ extern "C" fn log_trampoline(
     log::log!(target: "transcribe_cpp", level, "{text}");
 }
 
-/// Route native + ggml diagnostics into the [`log`] crate. Call once at
-/// startup, before loading models.
+/// Route native and ggml diagnostics into the [`log`] crate.
+///
+/// The first call to this function or [`disable_logging`] wins; later calls do
+/// nothing. Callers may call this before every model load.
 pub fn init_logging() {
-    // SAFETY: install-once-at-startup is the supported usage model.
-    unsafe { sys::transcribe_log_set(Some(log_trampoline), std::ptr::null_mut()) };
+    LOGGING.call_once(|| {
+        // SAFETY: the shared Once installs the sink before model loading starts.
+        unsafe { sys::transcribe_log_set(Some(log_trampoline), std::ptr::null_mut()) };
+    });
 }
 
 /// Silence the native library entirely (drops both library and ggml messages,
-/// including the stderr default). Call once at startup.
+/// including the stderr default).
+///
+/// The first call to this function or [`init_logging`] wins; later calls do
+/// nothing. Callers may call this before every model load.
 pub fn disable_logging() {
-    unsafe { sys::transcribe_log_set(None, std::ptr::null_mut()) };
+    LOGGING.call_once(|| {
+        // SAFETY: the shared Once installs the sink before model loading starts.
+        unsafe { sys::transcribe_log_set(None, std::ptr::null_mut()) };
+    });
 }

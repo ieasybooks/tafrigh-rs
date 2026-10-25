@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::{Arc, Once, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -21,7 +21,6 @@ pub const MAX_AUDIO_DURATION: Duration = Duration::from_secs(31);
 /// hop plus the centered one. A shorter chunk lasts under 10 ms, too short for any speech.
 const MIN_SAMPLES: usize = 160;
 static BACKENDS: OnceLock<Result<(), String>> = OnceLock::new();
-static LOGGING: Once = Once::new();
 
 /// A loaded Cohere model. Clones share the same bounded inference queue and native session.
 #[derive(Debug, Clone)]
@@ -161,7 +160,7 @@ fn load_session(config: &CohereConfig, path: &Path) -> Result<(Session, usize), 
     }
     // Native and ggml messages go to the `log` crate (target `transcribe_cpp`) instead of
     // stderr, so applications decide what to show.
-    LOGGING.call_once(transcribe_cpp::init_logging);
+    transcribe_cpp::init_logging();
     // Backend registration mutates process-global native state and must precede enumeration.
     BACKENDS
         .get_or_init(|| transcribe_cpp::init_backends_default().map_err(|error| error.to_string()))

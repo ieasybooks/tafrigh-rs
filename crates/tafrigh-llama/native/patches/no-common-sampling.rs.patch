@@ -1,0 +1,21 @@
+--- a/src/sampling.rs
++++ b/src/sampling.rs
+@@ -13,7 +13,9 @@
+ use crate::token::data_array::LlamaTokenDataArray;
+ use crate::token::logit_bias::LlamaLogitBias;
+ use crate::token::LlamaToken;
+-use crate::{GrammarError, SamplerAcceptError};
++use crate::GrammarError;
++#[cfg(feature = "common")]
++use crate::SamplerAcceptError;
+
+ /// A safe wrapper around `llama_sampler`.
+ pub struct LlamaSampler {
+@@ -520,6 +522,7 @@
+         ))
+     }
+
++    #[cfg(feature = "common")]
+     fn sanitize_trigger_words(
+         trigger_words: impl IntoIterator<Item = impl AsRef<[u8]>>,
+     ) -> Result<Vec<CString>, GrammarError> {

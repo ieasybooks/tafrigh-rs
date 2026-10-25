@@ -20,6 +20,8 @@ jobs:
       # Installs the toolchain pinned in rust-toolchain.toml, with rustfmt and clippy.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - name: Install native binding prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
       - name: Install media tools and Usage CLI
         uses: jdx/mise-action@v5.2.1
         with:
@@ -42,7 +44,7 @@ jobs:
       - run: cargo clippy --package tafrigh-cli --all-targets --features cohere --locked -- -D warnings
       - run: cargo test --package tafrigh-cli --features cohere --locked
       # The native source and patches must also build from the published package layout.
-      - run: cargo package --package tafrigh-transcribe --locked
+      - run: cargo package --package tafrigh-transcribe --package tafrigh-llama --locked
       - name: Check generated CLI reference
         run: |
           sh scripts/cli-docs.sh

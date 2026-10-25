@@ -70,7 +70,7 @@ tafrigh completions zsh --install
 
 ## Development
 
-Workspace builds include the Cohere recognizer, which compiles transcribe.cpp and needs CMake (pinned in mise) and a C++ compiler. Ordinary tests don't need the Cohere weights.
+Workspace builds include the Cohere recognizer and the bundled llama.cpp runtime for the upcoming Audar backend. They share transcribe.cpp's ggml and need CMake (pinned in mise), a C++ compiler, and libclang with its builtin headers ([native build notes](crates/tafrigh-llama/README.md)). Ordinary tests do not need model weights.
 
 Install the configured tools with mise, then run the checks from the repository root:
 
@@ -85,4 +85,4 @@ See [AGENTS.md](https://github.com/ieasybooks/tafrigh-rs/blob/main/AGENTS.md) fo
 
 ## License
 
-MIT. The bundled Silero model is also MIT; the bundled FireRedVAD model and normalization statistics are Apache-2.0 ([sources and licenses](crates/tafrigh/assets/NOTICE.firered-vad.md)). Cohere builds include a pinned transcribe.cpp source bundle with local CUDA fixes and ggml, both MIT ([third-party notices](crates/tafrigh-cohere/THIRD-PARTY-LICENSES.md)). The Cohere weights are Apache-2.0 and are downloaded, not bundled.
+MIT. The bundled Silero model is also MIT; the bundled FireRedVAD model and normalization statistics are Apache-2.0 ([sources and licenses](crates/tafrigh/assets/NOTICE.firered-vad.md)). Cohere builds include a pinned transcribe.cpp source bundle with local CUDA fixes and ggml, both MIT ([third-party notices](crates/tafrigh-cohere/THIRD-PARTY-LICENSES.md)). The bundled llama.cpp runtime is MIT and its Rust bindings are MIT OR Apache-2.0 ([notices](crates/tafrigh-llama/THIRD-PARTY-LICENSES.md)). The Cohere weights are Apache-2.0 and are downloaded, not bundled.

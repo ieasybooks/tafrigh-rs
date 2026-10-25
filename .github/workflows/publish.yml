@@ -25,6 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
+      - name: Install native binding prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
       - uses: Swatinem/rust-cache@v2
       - name: Check the release tag matches the crate version
         if: github.event_name == 'release' || inputs.publish
@@ -59,6 +61,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
+      - name: Install native binding prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
       - name: Authenticate with crates.io
         id: auth
         if: env.HAS_TOKEN != 'true'
@@ -71,7 +75,7 @@ jobs:
             | jq -r '.packages[] | select(.name == "tafrigh-cli") | .version')
           # Dependencies first. Versions already on crates.io are skipped, so a failed run can be
           # rerun.
-          for crate in tafrigh tafrigh-transcribe tafrigh-wit tafrigh-youtube tafrigh-cohere tafrigh-cli; do
+          for crate in tafrigh tafrigh-transcribe tafrigh-llama tafrigh-wit tafrigh-youtube tafrigh-cohere tafrigh-cli; do
             status=$(curl -s -o /dev/null -w '%{http_code}' -A "tafrigh-rs release ($GITHUB_REPOSITORY)" \
               "https://crates.io/api/v1/crates/$crate/$version")
             if [ "$status" = 200 ]; then
