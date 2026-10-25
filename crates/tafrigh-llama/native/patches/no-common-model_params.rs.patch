@@ -1,0 +1,25 @@
+--- a/src/model/params.rs
++++ b/src/model/params.rs
+@@ -1,5 +1,6 @@
+ //! A safe wrapper around `llama_model_params`.
+
++#[cfg(feature = "common")]
+ use crate::context::params::LlamaContextParams;
+ use crate::model::params::kv_overrides::KvOverrides;
+ use crate::LlamaCppError;
+@@ -160,6 +161,7 @@
+     kv_overrides: Vec<llama_cpp_sys_2::llama_model_kv_override>,
+     buft_overrides: Vec<llama_cpp_sys_2::llama_model_tensor_buft_override>,
+     devices: Pin<Box<[llama_cpp_sys_2::ggml_backend_dev_t; LLAMA_CPP_MAX_DEVICES]>>,
++    #[cfg(feature = "common")]
+     tensor_split: Vec<f32>,
+     progress_callback: Option<Box<dyn FnMut(f32) -> bool>>,
+ }
+@@ -683,6 +685,7 @@
+                 buft: std::ptr::null_mut(),
+             }],
+             devices: Box::pin([std::ptr::null_mut(); 16]),
++            #[cfg(feature = "common")]
+             tensor_split: Vec::new(),
+             progress_callback: None,
+         }

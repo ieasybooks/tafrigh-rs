@@ -34,7 +34,7 @@ jobs:
           # it keeps transcribe.cpp from linking the runner's system BLAS, which users may lack.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
-            features: cohere
+            features: cohere,audar
             cmake-args: -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON
           # CUDA builds link the CUDA runtime and cuBLAS of their major version; users install
           # them with the NVIDIA driver. ggml's default GPU list (up to 10 architectures) takes
@@ -43,30 +43,40 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             variant: -cuda12
             os: ubuntu-22.04
-            features: cuda
+            features: cuda,audar
             cuda: '12.9'
             cmake-args: -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DCMAKE_CUDA_ARCHITECTURES=75;80;86;89;90;120a-real
           - target: x86_64-unknown-linux-gnu
             variant: -cuda13
             os: ubuntu-22.04
-            features: cuda
+            features: cuda,audar
             cuda: '13.4'
             cmake-args: -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DCMAKE_CUDA_ARCHITECTURES=75;80;86;89;90;120a-real
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04-arm
-            features: cohere
+            features: cohere,audar
             cmake-args: -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16
           # transcribe.cpp already pins a portable CPU floor on macOS and embeds Metal.
           - target: aarch64-apple-darwin
             os: macos-latest
-            features: cohere
+            features: cohere,audar
           - target: x86_64-apple-darwin
             os: macos-latest
-            features: cohere
+            features: cohere,audar
     steps:
       - uses: actions/checkout@v7
       # Installs the toolchain pinned in rust-toolchain.toml, then the target to build for.
       - run: rustup toolchain install && rustup target add ${{ matrix.target }}
+      - name: Install native binding prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      - name: Configure native bindings for macOS
+        if: runner.os == 'macOS'
+        run: |
+          # Use Xcode's libclang and SDK for both native arm64 and cross-compiled x86_64.
+          # bindgen takes the target architecture from Cargo's TARGET environment variable.
+          echo "LIBCLANG_PATH=$(dirname "$(xcrun --find clang)")/../lib" >> "$GITHUB_ENV"
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-isysroot $(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
       - name: Check the release tag matches the crate version
         if: github.event_name == 'release' || inputs.publish
         env:
@@ -109,8 +119,17 @@ jobs:
           mkdir -p "$name/docs"
           cp "target/$TARGET/release/tafrigh" README.md LICENSE crates/tafrigh-cohere/THIRD-PARTY-LICENSES.md "$name/"
           cp docs/cli.md docs/tafrigh.1 "$name/docs/"
+          mkdir -p "$name/licenses/tafrigh-llama/native" "$name/licenses/tafrigh-audar"
+          cp crates/tafrigh-llama/THIRD-PARTY-LICENSES.md "$name/licenses/tafrigh-llama/"
+          cp -R crates/tafrigh-llama/native/licenses "$name/licenses/tafrigh-llama/native/"
+          cp crates/tafrigh-audar/THIRD-PARTY-LICENSES.md "$name/licenses/tafrigh-audar/"
+          cp -R crates/tafrigh-audar/licenses "$name/licenses/tafrigh-audar/"
+          mkdir -p "$name/licenses/firered-vad" "$name/licenses/silero-vad"
+          cp crates/tafrigh/assets/LICENSE.firered-vad crates/tafrigh/assets/NOTICE.firered-vad.md "$name/licenses/firered-vad/"
+          cp crates/tafrigh/assets/LICENSE.silero-vad "$name/licenses/silero-vad/"
           tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          wc -c "$name.tar.gz"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}${{ matrix.variant }}

@@ -1119,3 +1119,221 @@ fi
         );
     }
 }
+
+fn audar(args: &[&str]) -> Output {
+    command()
+        .env("PATH", "")
+        .args(["transcribe", "recording.mp3", "--transcriber", "audar"])
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+#[cfg(not(feature = "audar"))]
+#[test]
+fn audar_needs_a_build_with_the_audar_feature() {
+    let output = audar(&[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("cargo install tafrigh-cli --features audar"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[cfg(feature = "audar")]
+#[test]
+fn audar_rejects_unused_flags_and_invalid_settings_before_loading() {
+    for (args, expected) in [
+        (
+            vec!["--cohere-batch-size", "8"],
+            "'--cohere-batch-size': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--words"],
+            "'--words': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--no-words"],
+            "'--words': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--resend-gaps", "0"],
+            "'--resend-gaps': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["-w", "token"],
+            "'--wit-token': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--wit-audio", "wav"],
+            "'--wit-audio': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--wit-rps", "2"],
+            "'--wit-rps': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--wit-concurrency", "2"],
+            "'--wit-concurrency': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--wit-attempts", "2"],
+            "'--wit-attempts': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--wit-max-audio", "30"],
+            "'--wit-max-audio': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--wit-endpoint", "speech"],
+            "'--wit-endpoint': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--wit-api-url", "http://localhost"],
+            "'--wit-api-url': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--wit-api-version", "20240304"],
+            "'--wit-api-version': isn't used by --transcriber audar",
+        ),
+        (
+            vec!["--format", "srt,words-json"],
+            "needs word timings, which --transcriber audar doesn't provide",
+        ),
+        (
+            vec!["--language", "en"],
+            "expected ar with --transcriber audar",
+        ),
+        (vec!["--device", "cuda"], "expected auto, cpu, gpu or gpu:N"),
+        (
+            vec!["--max-chunk", "30"],
+            "exceeds the 30s Audar audio limit",
+        ),
+        (
+            vec!["--vad", "none", "--max-chunk", "30.0000625", "--pad", "0"],
+            "exceeds the 30s Audar audio limit",
+        ),
+        (
+            vec!["--max-chunk", "29", "--pad", "0.50003125"],
+            "exceeds the 30s Audar audio limit",
+        ),
+        (
+            vec!["--model", "q8_0"],
+            "expected a variant (turbo-bf16, turbo-q8_0, turbo-q4_k_m, flash-bf16, flash-q8_0, flash-q4_k_m) or an existing .gguf file",
+        ),
+        (
+            vec!["--audar-mmproj", "mmproj.gguf"],
+            "is only used with a local --model decoder",
+        ),
+    ] {
+        let output = audar(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains(expected),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[cfg(feature = "audar")]
+#[test]
+fn audar_accepts_all_variants_devices_and_chunk_limits_before_tool_checks() {
+    for variant in [
+        "turbo-q8_0",
+        "turbo-q4_k_m",
+        "turbo-bf16",
+        "flash-q8_0",
+        "flash-q4_k_m",
+        "flash-bf16",
+    ] {
+        let output = audar(&["--model", variant]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(stderr(&output).contains("a required program is unavailable"));
+    }
+    for args in [
+        vec![],
+        vec!["--device", "auto"],
+        vec!["--device", "cpu"],
+        vec!["--device", "gpu"],
+        vec!["--device", "gpu:0"],
+        vec!["--device", "gpu:1"],
+        vec!["--vad", "firered", "--threads", "0"],
+        vec!["--threads", "1", "--language", "ar"],
+        vec!["--max-chunk", "29", "--pad", "0.5"],
+        vec!["--vad", "none", "--max-chunk", "30", "--pad", "0"],
+        vec!["--max-chunk", "28", "--pad", "1"],
+    ] {
+        let output = audar(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(stderr(&output).contains("a required program is unavailable"));
+    }
+    let available = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let output = audar(&["--threads", &(available + 1).to_string()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("limited by available CPU parallelism"));
+}
+
+#[cfg(feature = "audar")]
+#[test]
+fn audar_local_files_require_matching_projector_argument() {
+    let directory = tempfile::tempdir().unwrap();
+    let decoder = directory.path().join("decoder.gguf");
+    let projector = directory.path().join("mmproj.gguf");
+    std::fs::write(&decoder, b"fake decoder").unwrap();
+    std::fs::write(&projector, b"fake projector").unwrap();
+    let decoder = decoder.to_str().unwrap();
+    let projector = projector.to_str().unwrap();
+    let output = audar(&["--model", decoder]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("is required with a local Audar decoder"));
+    let output = audar(&["--model", decoder, "--audar-mmproj", "missing.gguf"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("expected an existing BF16 mmproj"));
+    let output = audar(&[
+        "--model",
+        decoder,
+        "--audar-mmproj",
+        projector,
+        "--model-dir",
+        directory.path().to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stderr(&output).contains("a required program is unavailable"));
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+}
+
+#[test]
+fn other_backends_reject_the_audar_projector_flag() {
+    for backend in ["wit", "cohere", "youtube"] {
+        let output = command()
+            .args([
+                "recording.mp3",
+                "--transcriber",
+                backend,
+                "--audar-mmproj",
+                "mmproj.gguf",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            stderr(&output).contains(&format!(
+                "'--audar-mmproj': isn't used by --transcriber {backend}"
+            )),
+            "{}",
+            stderr(&output)
+        );
+    }
+}

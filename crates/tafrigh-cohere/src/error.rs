@@ -47,3 +47,34 @@ pub enum CohereError {
         actual: String,
     },
 }
+
+impl From<tafrigh::models::ModelDownloadError> for CohereError {
+    fn from(error: tafrigh::models::ModelDownloadError) -> Self {
+        use tafrigh::models::ModelDownloadError;
+        match error {
+            ModelDownloadError::CacheDirectory => Self::Config(
+                "could not determine a cache directory; set CohereConfig::model_dir".into(),
+            ),
+            ModelDownloadError::Io(error) => Self::Io(error),
+            ModelDownloadError::Download(error) => Self::Download(error),
+            ModelDownloadError::DownloadSize {
+                filename,
+                expected,
+                actual,
+            } => Self::DownloadSize {
+                filename,
+                expected,
+                actual,
+            },
+            ModelDownloadError::DownloadHash {
+                filename,
+                expected,
+                actual,
+            } => Self::DownloadHash {
+                filename,
+                expected,
+                actual,
+            },
+        }
+    }
+}

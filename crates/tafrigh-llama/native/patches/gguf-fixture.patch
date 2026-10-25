@@ -1,0 +1,11 @@
+--- a/src/gguf/tests.rs
++++ b/src/gguf/tests.rs
+@@ -2,7 +2,7 @@
+
+ use super::*;
+
+-const FIXTURE: &str = "src/gguf/ggml-vocab-bert-bge.gguf";
++const FIXTURE: &str = concat!(env!("TAFRIGH_LLAMA_SOURCE"), "/src/gguf/ggml-vocab-bert-bge.gguf");
+
+ #[test]
+ fn opens_valid_file() {

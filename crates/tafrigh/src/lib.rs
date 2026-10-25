@@ -35,6 +35,8 @@
 pub mod audio;
 mod error;
 mod event;
+#[cfg(feature = "models")]
+pub mod models;
 pub mod output;
 mod pipeline;
 pub mod segment;

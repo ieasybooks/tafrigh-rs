@@ -1,0 +1,18 @@
+--- a/src/log.rs
++++ b/src/log.rs
+@@ -69,7 +69,6 @@
+
+ #[derive(Clone, Copy)]
+ pub(super) enum Module {
+-    GGML,
+     LlamaCpp,
+     /// Multimodal
+     Mtmd,
+@@ -78,7 +77,6 @@
+ impl Module {
+     const fn name(&self) -> &'static str {
+         match self {
+-            Module::GGML => "ggml",
+             Module::LlamaCpp => "llama.cpp",
+             Module::Mtmd => "mtmd",
+         }

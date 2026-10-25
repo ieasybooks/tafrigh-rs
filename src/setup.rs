@@ -60,6 +60,8 @@ pub enum Backend {
     Wit(Box<WitRun>),
     #[cfg(feature = "cohere")]
     Cohere(Box<CohereRun>),
+    #[cfg(feature = "audar")]
+    Audar(Box<AudarRun>),
     Youtube(YoutubeCaptions),
 }
 
@@ -81,6 +83,13 @@ pub struct WitRun {
 pub struct CohereRun {
     pub audio: Audio,
     pub cohere: CohereConfig,
+}
+
+/// Settings for transcribing Arabic with Audar.
+#[cfg(feature = "audar")]
+pub struct AudarRun {
+    pub audio: Audio,
+    pub audar: tafrigh_audar::AudarConfig,
 }
 
 /// The segmenter `--vad` selects, configured. Built when the run starts, because loading
@@ -141,6 +150,7 @@ fn check_backend_options(transcriber: Transcriber, typed: &Typed) -> Result<(), 
         Transcriber::Wit => (
             "wit",
             &[
+                "--audar-mmproj",
                 "--model",
                 "--device",
                 "--model-dir",
@@ -151,8 +161,26 @@ fn check_backend_options(transcriber: Transcriber, typed: &Typed) -> Result<(), 
         Transcriber::Cohere => (
             "cohere",
             &[
+                "--audar-mmproj",
                 "--words",
                 "--resend-gaps",
+                "--wit-token",
+                "--wit-rps",
+                "--wit-concurrency",
+                "--wit-attempts",
+                "--wit-max-audio",
+                "--wit-endpoint",
+                "--wit-api-url",
+                "--wit-api-version",
+                "--wit-audio",
+            ],
+        ),
+        Transcriber::Audar => (
+            "audar",
+            &[
+                "--words",
+                "--resend-gaps",
+                "--cohere-batch-size",
                 "--wit-token",
                 "--wit-rps",
                 "--wit-concurrency",
@@ -190,6 +218,7 @@ fn check_backend_options(transcriber: Transcriber, typed: &Typed) -> Result<(), 
                 "--wit-audio",
                 "--ffmpeg",
                 "--ffprobe",
+                "--audar-mmproj",
                 "--model",
                 "--device",
                 "--model-dir",
@@ -230,6 +259,14 @@ impl Run {
                         "this build of tafrigh doesn't include Cohere; reinstall with \
                          `cargo install tafrigh-cli --features cohere` or use a release archive",
                     ));
+            }
+            #[cfg(feature = "audar")]
+            Transcriber::Audar => Backend::Audar(Box::new(AudarRun::new(args, typed)?)),
+            #[cfg(not(feature = "audar"))]
+            Transcriber::Audar => {
+                return Err(ValidationError::field("--transcriber").value("audar").reason(
+                    "this build of tafrigh doesn't include Audar; reinstall with `cargo install tafrigh-cli --features audar`",
+                ));
             }
             Transcriber::Youtube => Backend::Youtube(youtube(args)?),
         };
@@ -450,13 +487,14 @@ impl CohereRun {
                 .value(&models.device)
                 .reason("expected auto, cpu, gpu or gpu:N")
         })?;
-        let model = ModelSource::from(models.model.as_str());
+        let selection = models.model.as_deref().unwrap_or("q8_0");
+        let model = ModelSource::from(selection);
         if let ModelSource::Local(path) = &model
             && !path.is_file()
         {
             let variants: Vec<&str> = ModelVariant::ALL.iter().map(|v| v.name()).collect();
             return Err(ValidationError::field("--model")
-                .value(&models.model)
+                .value(selection)
                 .reason(format!(
                     "expected a variant ({}) or an existing .gguf file",
                     variants.join(", ")
@@ -473,6 +511,102 @@ impl CohereRun {
             cohere.threads = threads;
         }
         Ok(Self { audio, cohere })
+    }
+}
+
+#[cfg(feature = "audar")]
+impl AudarRun {
+    fn new(args: &Args, typed: &Typed) -> Result<Self, ValidationError> {
+        use tafrigh_audar::{AudarConfig, Device, MAX_THREADS, ModelSource, ModelVariant};
+
+        if let Some(format) = args
+            .output
+            .formats()?
+            .into_iter()
+            .find(|format| format.is_word_level())
+        {
+            return Err(ValidationError::field("--format")
+                .value(format.to_string())
+                .reason("needs word timings, which --transcriber audar doesn't provide"));
+        }
+        if let Some(language) = &args.language
+            && language != "ar"
+        {
+            return Err(ValidationError::field("--language")
+                .value(language)
+                .reason("expected ar with --transcriber audar"));
+        }
+        let audio = Audio::new(
+            args,
+            typed,
+            Chunking {
+                max_chunk: 29.0,
+                merge: true,
+            },
+            false,
+        )?;
+        audio.check_limit(tafrigh_audar::MAX_AUDIO_DURATION, "Audar")?;
+        let models = &args.models;
+        let selection = models.model.as_deref().unwrap_or("turbo-q8_0");
+        let model = if let Ok(variant) = selection.parse::<ModelVariant>() {
+            if models.audar_mmproj.is_some() {
+                return Err(ValidationError::field("--audar-mmproj")
+                        .reason("is only used with a local --model decoder; variants select their matching encoder"));
+            }
+            ModelSource::Variant(variant)
+        } else {
+            let decoder = Path::new(selection);
+            if !decoder.is_file()
+                || decoder
+                    .extension()
+                    .is_none_or(|extension| extension != "gguf")
+            {
+                return Err(ValidationError::field("--model")
+                    .value(selection)
+                    .reason(format!(
+                        "expected a variant ({}) or an existing .gguf file",
+                        ModelVariant::ALL.map(ModelVariant::name).join(", ")
+                    )));
+            }
+            let mmproj = models.audar_mmproj.clone().ok_or_else(|| {
+                ValidationError::field("--audar-mmproj")
+                    .reason("is required with a local Audar decoder")
+            })?;
+            if !mmproj.is_file()
+                || mmproj
+                    .extension()
+                    .is_none_or(|extension| extension != "gguf")
+            {
+                return Err(ValidationError::field("--audar-mmproj")
+                    .value(mmproj.display().to_string())
+                    .reason("expected an existing BF16 mmproj .gguf file matching the decoder"));
+            }
+            ModelSource::Local {
+                decoder: decoder.to_owned(),
+                mmproj,
+            }
+        };
+        let device: Device = models.device.parse().map_err(|_| {
+            ValidationError::field("--device")
+                .value(&models.device)
+                .reason("expected auto, cpu, gpu or gpu:N with Audar")
+        })?;
+        let max_threads = std::thread::available_parallelism()
+            .map_or(1, std::num::NonZero::get)
+            .min(MAX_THREADS);
+        let threads = models.threads.unwrap_or(0);
+        if threads > max_threads {
+            return Err(ValidationError::field("--threads").value(threads.to_string()).reason(format!(
+                "must be 0 (automatic) or at most {max_threads}, limited by available CPU parallelism and the native limit"
+            )));
+        }
+        let audar = AudarConfig {
+            model,
+            model_dir: models.model_dir.clone(),
+            device,
+            threads,
+        };
+        Ok(Self { audio, audar })
     }
 }
 
@@ -757,6 +891,8 @@ mod tests {
             super::Backend::Wit(wit) => wit.audio,
             #[cfg(feature = "cohere")]
             super::Backend::Cohere(cohere) => cohere.audio,
+            #[cfg(feature = "audar")]
+            super::Backend::Audar(audar) => audar.audio,
             super::Backend::Youtube(_) => panic!("expected an audio backend"),
         };
         (audio.chunks.max_chunk, audio.chunks.merge)
@@ -828,6 +964,58 @@ mod tests {
             assert_eq!(run.cohere.batch_size, defaults.batch_size);
             assert_eq!(run.cohere.threads, defaults.threads);
         }
+    }
+
+    #[cfg(feature = "audar")]
+    #[test]
+    fn audar_defaults_and_options_reach_the_recognizer() {
+        use tafrigh_audar::{Device, ModelSource, ModelVariant};
+        for (flags, variant, device, threads) in [
+            (vec![], ModelVariant::TurboQ8, Device::Auto, 0),
+            (
+                vec![
+                    "--model",
+                    "flash-q4_k_m",
+                    "--device",
+                    "cpu",
+                    "--threads",
+                    "1",
+                ],
+                ModelVariant::FlashQ4KM,
+                Device::Cpu,
+                1,
+            ),
+        ] {
+            let argv = [vec!["tafrigh", "x.mp3", "--transcriber", "audar"], flags].concat();
+            let argv: Vec<_> = argv.iter().map(std::ffi::OsStr::new).collect();
+            let Ok(super::Plan::Transcribe(run)) = super::Plan::parse_from(&argv) else {
+                panic!("expected transcription");
+            };
+            let super::Backend::Audar(run) = run.backend else {
+                panic!("expected Audar");
+            };
+            assert_eq!(run.audar.model, ModelSource::Variant(variant));
+            assert_eq!(run.audar.device, device);
+            assert_eq!(run.audar.threads, threads);
+            assert_eq!(run.audio.chunks.max_chunk, Duration::from_secs(29));
+            assert_eq!(run.audio.chunks.longest_request(), Duration::from_secs(30));
+            assert!(run.audio.chunks.merge);
+            assert!(run.audio.chunks.resend_gaps.is_none());
+            assert!(
+                matches!(run.audio.segmenter, super::SegmenterConfig::Silero(config) if (config.threshold - 0.15).abs() < f32::EPSILON)
+            );
+        }
+        assert_eq!(
+            chunking(&[
+                "x.mp3",
+                "--transcriber",
+                "audar",
+                "--no-merge",
+                "--max-chunk",
+                "15"
+            ]),
+            (Duration::from_secs(15), false)
+        );
     }
 
     #[test]
