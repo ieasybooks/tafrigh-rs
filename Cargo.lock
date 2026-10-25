@@ -2263,16 +2263,20 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "csv",
+ "dirs",
  "futures",
  "rand",
+ "reqwest",
  "rustfft",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",
  "tracing",
  "tract-onnx",
+ "wiremock",
 ]
 
 [[package]]
@@ -2300,9 +2304,7 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "dirs",
  "reqwest",
- "sha2",
  "tafrigh",
  "tafrigh-transcribe",
  "tempfile",
@@ -2310,7 +2312,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "wiremock",
 ]
 
 [[package]]

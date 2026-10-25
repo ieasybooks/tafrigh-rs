@@ -17,15 +17,20 @@ default = ["silero", "firered"]
 silero = ["dep:tract-onnx"]
 ## Streaming FireRedVAD with Kaldi filterbanks and tract (pure Rust).
 firered = ["dep:tract-onnx", "dep:rustfft"]
+## Verified downloads of pinned model files into a shared platform cache.
+models = ["dep:dirs", "dep:reqwest", "dep:sha2", "tokio/io-util"]
 
 [dependencies]
 async-trait.workspace = true
 csv.workspace = true
+dirs = { version = "7.0.0", optional = true }
 futures.workspace = true
 rand.workspace = true
+reqwest = { workspace = true, optional = true }
 rustfft = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
+sha2 = { version = "0.11.1", optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "process", "fs", "time"] }
 tracing.workspace = true
@@ -34,6 +39,7 @@ tract-onnx = { workspace = true, optional = true }
 [dev-dependencies]
 base64.workspace = true
 tempfile.workspace = true
+wiremock.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 
 [lints]

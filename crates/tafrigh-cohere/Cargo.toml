@@ -14,11 +14,9 @@ categories = ["multimedia::audio", "api-bindings"]
 cuda = ["tafrigh-transcribe/cuda"]
 
 [dependencies]
-tafrigh = { path = "../tafrigh", version = "0.4.0" }
+tafrigh = { path = "../tafrigh", version = "0.4.0", features = ["models"] }
 async-trait.workspace = true
-dirs = "7.0.0"
 reqwest.workspace = true
-sha2 = "0.11.1"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
 tracing.workspace = true
@@ -29,7 +27,6 @@ anyhow.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tracing-subscriber.workspace = true
-wiremock.workspace = true
 
 [lints]
 workspace = true
