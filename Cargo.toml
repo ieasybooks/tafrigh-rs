@@ -1,7 +1,7 @@
 [package]
 name = "tafrigh-cli"
 description = "Command-line transcription of audio, video and playlists into subtitles and text with tafrigh."
-version = "0.4.0"
+version = "0.5.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -26,11 +26,11 @@ audar = ["dep:tafrigh-audar"]
 cuda = ["cohere", "tafrigh-cohere/cuda", "tafrigh-audar?/cuda"]
 
 [dependencies]
-tafrigh = { path = "crates/tafrigh", version = "0.4.0" }
-tafrigh-wit = { path = "crates/tafrigh-wit", version = "0.4.0" }
-tafrigh-youtube = { path = "crates/tafrigh-youtube", version = "0.4.0" }
-tafrigh-cohere = { path = "crates/tafrigh-cohere", version = "0.4.0", optional = true }
-tafrigh-audar = { path = "crates/tafrigh-audar", version = "0.4.0", optional = true }
+tafrigh = { path = "crates/tafrigh", version = "0.5.0" }
+tafrigh-wit = { path = "crates/tafrigh-wit", version = "0.5.0" }
+tafrigh-youtube = { path = "crates/tafrigh-youtube", version = "0.5.0" }
+tafrigh-cohere = { path = "crates/tafrigh-cohere", version = "0.5.0", optional = true }
+tafrigh-audar = { path = "crates/tafrigh-audar", version = "0.5.0", optional = true }
 anyhow.workspace = true
 indicatif.workspace = true
 shell-words.workspace = true
