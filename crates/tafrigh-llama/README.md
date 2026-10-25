@@ -32,3 +32,5 @@ Add `--features cuda` to test the shared CUDA backend. The test uses three CPU t
 The package includes all native source, binding source, patches, licenses and test fixtures. `cargo package -p tafrigh-llama --locked --offline` can verify it after Cargo dependencies are cached and the matching `tafrigh-transcribe` version is available from the registry (or a local package-verification source). Native compilation itself is offline. Publish `tafrigh-transcribe` first, then this crate. Its first publication needs the token/bootstrap step in the repository's release guide before trusted publishing can be configured. This crate follows tafrigh's release version independently of the bundled upstream version.
 
 See `THIRD-PARTY-LICENSES.md` for the MIT llama.cpp runtime, MIT OR Apache-2.0 Rust bindings, bundled third-party notices and the speech fixture.
+
+`MtmdContext::init_from_file_with_device` selects an encoder device by its ggml index from `list_llama_ggml_backend_devices`, checking the index before initialization. This exposes the existing native device field without changing inference settings; the original initializer keeps automatic selection.

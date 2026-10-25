@@ -46,8 +46,8 @@ workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere", "crates/tafrigh-transcribe", "crates/tafrigh-llama"]
-default-members = [".", "crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere", "crates/tafrigh-transcribe", "crates/tafrigh-llama"]
+members = ["crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere", "crates/tafrigh-transcribe", "crates/tafrigh-llama", "crates/tafrigh-audar"]
+default-members = [".", "crates/tafrigh", "crates/tafrigh-wit", "crates/tafrigh-youtube", "crates/tafrigh-cohere", "crates/tafrigh-transcribe", "crates/tafrigh-llama", "crates/tafrigh-audar"]
 
 [workspace.package]
 edition = "2024"

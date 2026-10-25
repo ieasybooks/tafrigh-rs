@@ -24,7 +24,7 @@
       "crate": "llama-cpp-2",
       "path": "src/mtmd.rs",
       "patch": "patches/mtmd-parameters.patch",
-      "reason": "Expose the existing encoder flash_attn_type and warmup fields without changing native inference, and use the public sys module in the mtmd doctest."
+      "reason": "Expose the existing encoder flash_attn_type and warmup fields and checked device selection without changing native inference, and use the public sys module in the mtmd doctest."
     },
     {
       "crate": "llama-cpp-2",
