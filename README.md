@@ -6,7 +6,7 @@ Works with files, folders, and URLs supported by yt-dlp. Writes txt, srt, vtt, c
 
 ## Install
 
-Download the archive for your platform from the [latest release](https://github.com/ieasybooks/tafrigh-rs/releases/latest), extract it, and put `tafrigh` on your `PATH`. Archives include Cohere. On Linux with an NVIDIA GPU, pick the `-cuda12` or `-cuda13` archive that matches your CUDA version ([requirements](docs/guide.md#gpus)).
+Download the archive for your platform from the [latest release](https://github.com/ieasybooks/tafrigh-rs/releases/latest), extract it, and put `tafrigh` on your `PATH`. Archives include Cohere and Audar, with Metal on macOS. On Linux with an NVIDIA GPU, pick the `-cuda12` or `-cuda13` archive that matches your CUDA version ([requirements](docs/guide.md#gpus)).
 
 Or install with Cargo (Rust 1.99 or newer). The `cohere` feature adds Cohere and needs CMake and a C++ compiler; `cuda` also needs the CUDA toolkit:
 
@@ -46,7 +46,7 @@ tafrigh lectures/ --transcriber cohere --model q4_k_m -r -o transcripts -f srt,t
 
 Cohere merges speech into chunks of up to 30 s and gives one subtitle cue per chunk, without word timings. See the [Cohere guide](docs/guide.md#cohere-transcribe-arabic) for variants, devices and speed.
 
-Audar-ASR V1 is an optional Arabic backend with Turbo and Flash models. Build it with `cargo install tafrigh-cli --locked --features audar` (CMake, a C++ compiler and libclang required), or `--features audar,cuda` for NVIDIA GPUs. The default Turbo Q8_0 downloads a 2.17 GB decoder and its required 0.64 GB BF16 audio encoder.
+Audar-ASR V1 is an Arabic backend with Turbo and Flash models, included in release archives. To build from source, use `cargo install tafrigh-cli --locked --features audar` (CMake, a C++ compiler and libclang required), or `--features audar,cuda` for NVIDIA GPUs. The default Turbo Q8_0 downloads a 2.17 GB decoder and its required 0.64 GB BF16 audio encoder.
 
 ```sh
 tafrigh lecture.mp3 --transcriber audar

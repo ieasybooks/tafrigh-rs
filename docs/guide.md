@@ -66,10 +66,10 @@ One process shares its loaded model across all input files. `--cohere-batch-size
 
 | Build | GPU |
 |---|---|
-| macOS arm64 archive | Metal |
+| macOS arm64 and x86_64 archives | Metal |
 | Linux x86_64 `-cuda12` archive | NVIDIA Turing (GTX 16 and RTX 20 series) or newer, with the NVIDIA driver and the CUDA 12 runtime and cuBLAS (`libcudart.so.12`, `libcublas.so.12`, `libcublasLt.so.12`) |
 | Linux x86_64 `-cuda13` archive | NVIDIA Turing (GTX 16 and RTX 20 series) or newer, with driver 580 or newer and the CUDA 13 runtime and cuBLAS |
-| Other archives | none; Cohere runs on the CPU |
+| Linux CPU archives | none; Cohere and Audar run on the CPU |
 | `cargo install tafrigh-cli --features cuda` | NVIDIA, built against your CUDA toolkit |
 
 On the CPU, the Linux release archives need AVX2 (Intel since 2013, AMD Zen) on x86_64, or ARMv8.2 with dot-product instructions (such as AWS Graviton2 or Raspberry Pi 5) on arm64. Build from source with Cargo for older CPUs.
@@ -89,7 +89,7 @@ Both CUDA archives include native code for Turing, Ampere, Ada, Hopper and Black
 
 `--transcriber audar` recognizes Arabic on your machine with [Audar-ASR V1](https://github.com/AudarAI/Audar-ASR-V1). Select Turbo for the better measured accuracy or Flash for smaller model files. Arabic is the only supported language (`--language ar` is optional). The backend needs ffmpeg and both a decoder and its BF16 audio encoder.
 
-Build with `cargo install tafrigh-cli --locked --features audar`, or `--features audar,cuda` for NVIDIA GPUs. Audar builds require CMake, a C++ compiler and libclang; CUDA also needs the CUDA toolkit. Audar uses the bundled llama.cpp/mtmd runtime and shares ggml with Cohere. Release archives currently include Cohere; adding Audar to those archives is a separate change.
+All release archives include Audar and Cohere, with Metal on macOS and CUDA in the Linux `-cuda12` and `-cuda13` archives ([requirements](#gpus)). To build from source, use `cargo install tafrigh-cli --locked --features audar`, or `--features audar,cuda` for NVIDIA GPUs. Audar builds require CMake, a C++ compiler and libclang; CUDA also needs the CUDA toolkit. Audar uses the bundled llama.cpp/mtmd runtime and shares ggml with Cohere.
 
 ```sh
 tafrigh lecture.mp3 --transcriber audar -f srt,txt
