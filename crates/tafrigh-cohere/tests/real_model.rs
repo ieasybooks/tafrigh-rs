@@ -39,10 +39,10 @@ async fn recognizes_short_arabic_clip_when_model_is_configured() {
         backend == "cpu"
     });
     assert!(!recognizer.word_timings());
-    // One 16 kHz sample under 400 s.
+    // The supported recognition length is smaller than the native encoder capacity.
     assert_eq!(
         recognizer.max_audio_duration(),
-        Some(Duration::from_nanos(399_999_937_500))
+        Some(Duration::from_secs(31))
     );
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample1.wav");
     let samples = tokio::task::spawn_blocking(move || {

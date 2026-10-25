@@ -4,7 +4,7 @@
 //! Each option's own range is checked here, while parsing, so those mistakes fail with Usage's
 //! diagnostics and exit code before any program, model or network request is touched. Library
 //! constructors still check how settings fit together when the run starts, such as whether
-//! `--max-chunk` leaves room for Silero's speech padding.
+//! `--max-chunk` leaves room for the detector's speech padding.
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -17,6 +17,7 @@ use anyhow::bail;
 use tafrigh::ChunkOptions;
 use tafrigh::audio::{Decoder, Padding};
 use tafrigh::output::{BuiltinFormat, OutputMode, OutputWriter};
+use tafrigh::segment::firered::{FireRedConfig, FireRedSegmenter};
 use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
 use tafrigh::segment::{FixedWindows, Segmenter};
 use tafrigh::source::{Input, YtDlp};
@@ -83,9 +84,10 @@ pub struct CohereRun {
 }
 
 /// The segmenter `--vad` selects, configured. Built when the run starts, because loading
-/// Silero takes a moment.
+/// the speech models takes a moment.
 pub enum SegmenterConfig {
     Silero(SileroConfig),
+    FireRed(FireRedConfig),
     FixedWindows(Duration),
 }
 
@@ -93,6 +95,7 @@ impl SegmenterConfig {
     pub fn build(self) -> tafrigh::Result<Arc<dyn Segmenter>> {
         Ok(match self {
             Self::Silero(config) => Arc::new(SileroSegmenter::new(config)?),
+            Self::FireRed(config) => Arc::new(FireRedSegmenter::new(config)?),
             Self::FixedWindows(window) => Arc::new(FixedWindows::new(window)?),
         })
     }
@@ -317,9 +320,15 @@ impl Audio {
         };
         let pad = duration("--pad", segmentation.pad, Zero::Disables)?;
         let resend_gaps = duration("--resend-gaps", segmentation.resend_gaps, Zero::Disables)?;
-        if !(0.0..=1.0).contains(&segmentation.vad_threshold) {
+        let threshold = segmentation
+            .vad_threshold
+            .unwrap_or_else(|| match segmentation.vad {
+                cli::Vad::Silero | cli::Vad::None => SileroConfig::default().threshold,
+                cli::Vad::Firered => FireRedConfig::default().threshold,
+            });
+        if !(0.0..=1.0).contains(&threshold) {
             return Err(ValidationError::field("--vad-threshold")
-                .value(segmentation.vad_threshold.to_string())
+                .value(threshold.to_string())
                 .reason("must be between 0 and 1"));
         }
         let padding = match (segmentation.pad_noise, pad.is_zero()) {
@@ -338,7 +347,14 @@ impl Audio {
         };
         let segmenter = match segmentation.vad {
             cli::Vad::Silero => SegmenterConfig::Silero(SileroConfig {
-                threshold: segmentation.vad_threshold,
+                threshold,
+                min_speech: Duration::from_millis(segmentation.min_speech_ms.into()),
+                max_speech: max_chunk,
+                min_silence: Duration::from_millis(segmentation.min_silence_ms.into()),
+                speech_pad: Duration::from_millis(segmentation.speech_pad_ms.into()),
+            }),
+            cli::Vad::Firered => SegmenterConfig::FireRed(FireRedConfig {
+                threshold,
                 min_speech: Duration::from_millis(segmentation.min_speech_ms.into()),
                 max_speech: max_chunk,
                 min_silence: Duration::from_millis(segmentation.min_silence_ms.into()),
@@ -863,5 +879,92 @@ mod tests {
             ["srt", "txt", "words.srt"]
         );
         assert!(formats(&["-f", "txt", "--words"]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod vad_tests {
+    use super::*;
+
+    fn audio(extra: &[&str]) -> Audio {
+        let mut argv = vec![
+            "tafrigh",
+            "recording.wav",
+            "--transcriber",
+            "wit",
+            "--wit-token",
+            "test-token",
+        ];
+        argv.extend_from_slice(extra);
+        let argv: Vec<_> = argv.into_iter().map(OsStr::new).collect();
+        let Plan::Transcribe(run) = Plan::parse_from(&argv).unwrap() else {
+            panic!("transcription plan")
+        };
+        let Backend::Wit(run) = run.backend else {
+            panic!("Wit plan")
+        };
+        run.audio
+    }
+
+    #[test]
+    fn detector_defaults_are_independent() {
+        let SegmenterConfig::Silero(config) = audio(&[]).segmenter else {
+            panic!("default Silero")
+        };
+        assert_eq!(config, SileroConfig::default());
+        let SegmenterConfig::FireRed(config) = audio(&["--vad", "firered"]).segmenter else {
+            panic!("FireRed")
+        };
+        assert_eq!(config, FireRedConfig::default());
+        assert!(matches!(
+            audio(&["--vad", "none"]).segmenter,
+            SegmenterConfig::FixedWindows(_)
+        ));
+    }
+
+    #[test]
+    fn explicit_vad_settings_apply_to_firered() {
+        let configured = audio(&[
+            "--vad",
+            "firered",
+            "--vad-threshold",
+            "0.7",
+            "--min-speech-ms",
+            "200",
+            "--min-silence-ms",
+            "400",
+            "--speech-pad-ms",
+            "80",
+            "--max-chunk",
+            "12",
+            "--merge",
+        ]);
+        let SegmenterConfig::FireRed(config) = configured.segmenter else {
+            panic!("FireRed")
+        };
+        assert_eq!(
+            config,
+            FireRedConfig {
+                threshold: 0.7,
+                min_speech: Duration::from_millis(200),
+                min_silence: Duration::from_millis(400),
+                speech_pad: Duration::from_millis(80),
+                max_speech: Duration::from_secs(12),
+            }
+        );
+        assert!(configured.chunks.merge);
+        assert_eq!(configured.chunks.max_chunk, Duration::from_secs(12));
+        let SegmenterConfig::Silero(config) =
+            audio(&["--vad", "silero", "--vad-threshold", "0.7"]).segmenter
+        else {
+            panic!("Silero")
+        };
+        assert_eq!(
+            config,
+            SileroConfig {
+                threshold: 0.7,
+                ..Default::default()
+            }
+        );
     }
 }

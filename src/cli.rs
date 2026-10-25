@@ -255,7 +255,8 @@ pub struct Segmentation {
     pub vad: Vad,
 
     /// Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohere].
-    /// Wit allows up to 60 on dictation and 20 on speech, Cohere under 400, padding included.
+    /// Wit allows up to 60 on dictation and 20 on speech, Cohere up to 31, padding included.
+    /// Longer Cohere chunks can silently lose text. With the default --pad 0.5, use at most 30.
     #[usage(long, value_name = "SECONDS")]
     pub max_chunk: Option<f64>,
 
@@ -265,9 +266,10 @@ pub struct Segmentation {
     #[usage(long, negate = "no-merge")]
     pub merge: bool,
 
-    /// Speech probability threshold.
-    #[usage(long, value_name = "P", default = "0.5")]
-    pub vad_threshold: f32,
+    /// Speech probability threshold [default: 0.15 for silero, 0.4 for firered]; speech ends
+    /// below this minus 0.15 (at least 0.01). At 0.5, Silero misses much melodic recitation.
+    #[usage(long, value_name = "P")]
+    pub vad_threshold: Option<f32>,
 
     /// Shortest speech kept, in milliseconds.
     #[usage(long, value_name = "MS", default = "500")]
@@ -306,6 +308,8 @@ pub struct Segmentation {
 pub enum Vad {
     /// Silero VAD v6; long speech is split at its longest pause.
     Silero,
+    /// Streaming FireRedVAD; useful for recitation missed by Silero.
+    Firered,
     /// Fixed windows of --max-chunk seconds, no voice detection.
     None,
 }

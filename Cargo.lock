@@ -2158,6 +2158,7 @@ dependencies = [
  "csv",
  "futures",
  "rand",
+ "rustfft",
  "serde",
  "serde_json",
  "tempfile",

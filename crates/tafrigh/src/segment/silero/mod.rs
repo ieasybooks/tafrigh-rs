@@ -7,11 +7,12 @@
 #[cfg(test)]
 mod golden_tests;
 mod model;
-mod timestamps;
 
+#[cfg(test)]
+use super::timestamps;
+use super::timestamps::{StreamingTimestamps, TimestampParams};
 use model::ProbabilityStream;
 pub use model::SileroModel;
-use timestamps::{StreamingTimestamps, TimestampParams};
 
 use std::time::Duration;
 
@@ -41,9 +42,11 @@ pub struct SileroConfig {
 }
 
 impl Default for SileroConfig {
+    /// The threshold is 0.15 rather than Silero's 0.5: at 0.5, Silero scores some Quran
+    /// recitation, especially melodic recitation, as silence, so it never reaches the recognizer.
     fn default() -> Self {
         Self {
-            threshold: 0.5,
+            threshold: 0.15,
             min_speech: Duration::from_millis(500),
             max_speech: Duration::from_secs(15),
             min_silence: Duration::from_millis(300),
@@ -57,6 +60,7 @@ impl SileroConfig {
     fn timestamp_params(&self) -> TimestampParams {
         let millis = |duration: Duration| u32::try_from(duration.as_millis()).unwrap_or(u32::MAX);
         TimestampParams {
+            frame_samples: WINDOW_SAMPLES,
             threshold: self.threshold,
             min_speech_ms: millis(self.min_speech),
             max_speech_s: self.max_speech.as_secs_f64(),

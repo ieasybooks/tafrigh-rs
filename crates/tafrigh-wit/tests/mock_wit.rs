@@ -511,7 +511,9 @@ async fn transcriber(server: &MockServer, options: ChunkOptions) -> ChunkedTrans
     let recognizer = WitRecognizer::new(config(server, &["a", "b"]))
         .await
         .unwrap();
+    // The expected spans below come from Silero's own 0.5 threshold.
     let config = SileroConfig {
+        threshold: 0.5,
         speech_pad: Duration::from_millis(60),
         ..SileroConfig::default()
     };

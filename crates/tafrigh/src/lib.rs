@@ -4,7 +4,7 @@
 //!
 //! - [`audio`]: decoding any media file to 16 kHz mono PCM through `ffmpeg`, streamed.
 //! - [`segment`]: splitting that stream into speech spans ([`segment::Segmenter`]), with
-//!   Silero VAD v6 ([`segment::silero`]) as the default and fixed windows as a fallback.
+//!   Silero VAD v6 as the default, streaming `FireRedVAD` as an alternative, and fixed windows.
 //! - [`Transcriber`] turns a media file into [`Segment`]s, and [`CaptionProvider`] retrieves
 //!   existing captions. [`ChunkedTranscriber`] pairs a segmenter with a [`ChunkRecognizer`]
 //!   (for example a cloud speech API) and runs requests concurrently while the file is still

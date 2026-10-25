@@ -4,4 +4,4 @@
 
 SHA-256: `14ce25757caa30e7e39a8ec75cb05fdc7838e92ad0c6619e9c0697515779adaa`.
 
-Ordinary tests do not load a model. Set `TAFRIGH_TEST_COHERE_MODEL=/path/to/model.gguf` to enable the integration test. It checks Arabic output, concurrent result delivery, empty word timings and the native session's 400-second input limit without pinning exact text across quantizations or devices.
+Ordinary tests do not load a model. Set `TAFRIGH_TEST_COHERE_MODEL=/path/to/model.gguf` to enable the integration test. It checks Arabic output, concurrent result delivery, empty word timings and the recognizer's 31-second input limit without pinning exact text across quantizations or devices.

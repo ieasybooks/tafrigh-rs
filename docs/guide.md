@@ -82,8 +82,8 @@ Both CUDA archives include native code for Turing, Ampere, Ada, Hopper and Black
 - There are no word timings. Each chunk becomes one subtitle cue, so cues can be as long as the chunk. `--words` and the `words-*` formats are errors with Cohere, and `--resend-gaps` doesn't apply.
 - When the model starts repeating itself or reaches its token limit, tafrigh keeps the chunk's text up to that point, with the repeats dropped, and prints a warning.
 - Punctuation is always on.
-- A chunk, padding included, must be shorter than 400 s.
-- The model can invent text for silence and noise. Silero VAD removes them, so avoid `--vad none` on noisy recordings.
+- A chunk, padding included, must be at most 31 s: with the default `--pad 0.5` on each side, `--max-chunk` must be at most 30. Longer inputs can silently omit speech even though transcribe.cpp advertises a 400 s encoder capacity ([upstream issue](https://github.com/handy-computer/transcribe.cpp/issues/128)). tafrigh rejects settings that exceed this limit before loading a model; reduce `--max-chunk` or `--pad`. Long recordings still work: tafrigh splits them into supported chunks.
+- The model can invent text for silence and noise. Speech detection removes them, so avoid `--vad none` on noisy recordings.
 
 ## Inputs and outputs
 
@@ -182,16 +182,32 @@ usage generate manpage -f tafrigh.usage.kdl > tafrigh.1
 
 - **More tokens, faster runs.** tafrigh starts one request per second per token by default; additional tokens can increase throughput. All tokens must belong to apps of the same language. Use `-l` / `--language` to set that language explicitly, or omit it to detect the language from the tokens.
 - **`--merge` for speed with Wit.** It sends fewer, longer requests. In the benchmark below, it roughly halved runtime with a small accuracy tradeoff.
+- **Quran recitation.** Silero scores some recitation, especially melodic (mujawwad) recitation, as silence, and audio it rejects never reaches the recognizer. The default `--vad-threshold` is therefore 0.15 rather than Silero's own 0.5. On 500 Arabic clips this lowered word errors from 24.4% to 22.3% with Cohere (Quran clips: 24.8% to 16.5%) and from 32.2% to 31.5–32.0% with Wit, with no text produced on 19 minutes of silence, noise and music at either setting. Even 0.15 still skips parts of melodic recitation.
 - **Interrupted?** Rerun the same command with `--skip-existing`; finished items are kept.
 - **A chunk that keeps failing** fails its file, so a rerun gives a complete transcript. `--on-chunk-error skip` leaves the chunk out instead.
 
 Exit codes: `0` success, `1` error, `2` invalid arguments, `3` some items failed, `130` interrupted.
 
+## Choosing a speech detector
+
+`--vad silero` remains the default. Use `--vad firered` for the streaming [FireRedVAD](https://github.com/FireRedTeam/FireRedVAD) model, which retains more of the Quran recitation that Silero can miss. Both run locally on the CPU in Rust, with bundled weights. `--vad none` sends fixed windows of the entire recording, including silence and noise.
+
+The default onset threshold is 0.15 for Silero and 0.4 for FireRed. `--vad-threshold`, `--min-speech-ms`, `--min-silence-ms`, `--speech-pad-ms`, and `--max-chunk` apply to the selected detector. Both use an exit threshold 0.15 below onset (at least 0.01), keep speech lasting at least 500 ms, wait for 300 ms silence, and keep 250 ms of source context on each side. `--pad` adds separate synthetic silence before recognition. Backend chunking defaults still apply: Cohere merges up to 30 s; Wit uses up to 15 s without merging.
+
+In the 500-clip Arabic evaluation with Cohere `q8_0` and 30 s merged chunks, this Rust FireRed implementation gave 21.44% word error rate, versus 22.33% for Silero at its default 0.15 and 24.40% at 0.5. On four long recitations FireRed scored 15.99%, versus 41.57% and 57.41% for Silero at 0.15 and 0.5. All three settings produced zero chunks on nine non-speech controls totaling about 19 minutes. FireRed recovered missing words, but some clips acquired extra words; the advantage was concentrated in difficult recitation, with ordinary-speech accuracy close to Silero at 0.15. These results use Cohere recognition and do not establish Wit accuracy or performance on sung audio.
+
+On an i5-8500, processing 510.4 s of audio took a median of 2.31 s with FireRed and 1.64 s with Silero at 0.5, excluding model loading and decoding. With a GTX 1660 SUPER running Cohere `q8_0` (GPU batch 8, four threads, 30 s merged chunks, `--pad 0.5`), complete CLI medians were 214.4 s for FireRed versus 198.9 s for Silero at 0.5 on 79.1 minutes of balanced audio, and 158.7 s versus 158.3 s on a 69.3-minute lecture. Silero at 0.15 took 7.9% longer than at 0.5 on the balanced audio. Each median uses three runs; complete CLI differences include the extra speech retained for recognition.
+
+```sh
+tafrigh recitation.mp3 --transcriber cohere --vad firered
+tafrigh lecture.mp3 --transcriber wit --vad firered
+```
+
 ## How it works
 
 With `--transcriber wit`:
 
-1. ffmpeg decodes the audio, and [Silero VAD](https://github.com/snakers4/silero-vad) finds the speech in it. ffprobe, normally shipped with ffmpeg, adds progress percentages.
+1. ffmpeg decodes the audio, and the selected detector ([Silero VAD](https://github.com/snakers4/silero-vad) by default) finds the speech in it. ffprobe, normally shipped with ffmpeg, adds progress percentages.
 2. The speech is cut into chunks of up to 15 s by default, padded with silence, encoded as Opus at 24 kbps, and sent to Wit across all tokens. Opus requests are about a twelfth of the size of WAV, and need an ffmpeg built with libopus, as most builds are. `--wit-audio wav` sends WAV instead.
 3. When Wit returns no words for a stretch of speech, that stretch is sent again on its own (`--resend-gaps`).
 4. When requests time out or Wit returns HTTP 408 or a server error, fewer requests are sent at once, so an overloaded network or Wit gets time to recover. Successful requests raise the limit again, up to `--wit-concurrency` per token. Rate limits are handled separately, by waiting as Wit asks.
@@ -285,7 +301,7 @@ let transcriber = ChunkedTranscriber::new(segmenter, recognizer, options)?;
 let segments = transcriber.transcribe("lecture.mp3".as_ref(), &NoProgress).await?;
 ```
 
-Cohere returns punctuated text with one segment per chunk and no word timings. Audio including padding must be shorter than 400 seconds: transcribe.cpp advertises 400 but rejects exactly that, so the limit is one sample less. Chunks shorter than 10 ms, which the model can't accept, give no text. The normal 15-second chunk policy still applies. GPU builds use Metal on Apple or the crate's `cuda` feature on NVIDIA; CPU works elsewhere. `Device::Auto` attempts the available GPU and retries loading on CPU if needed, `Device::Cpu` selects CPU, and `Device::Gpu` requires a GPU. `Device::GpuIndex(N)` selects the zero-based Nth GPU in transcribe.cpp's GPU list and fails if unavailable. `backend()` and `device_name()` show the actual choice. Model or session load failures can trigger automatic CPU fallback; inference failures are reported.
+Cohere returns punctuated text with one segment per chunk and no word timings. `MAX_AUDIO_DURATION` and `ChunkRecognizer::max_audio_duration()` limit audio including padding to 31 seconds, or less if the native session reports a smaller capacity. Longer input can silently lose text even below the native encoder's capacity. `ChunkedTranscriber::new` rejects oversized chunk settings, and direct `recognize` calls reject oversized PCM before queueing inference. Chunks shorter than 10 ms, which the model can't accept, give no text. The normal 15-second library chunk policy still applies; 30-second chunks with the default 0.5-second padding on each side also fit. GPU builds use Metal on Apple or the crate's `cuda` feature on NVIDIA; CPU works elsewhere. `Device::Auto` attempts the available GPU and retries loading on CPU if needed, `Device::Cpu` selects CPU, and `Device::Gpu` requires a GPU. `Device::GpuIndex(N)` selects the zero-based Nth GPU in transcribe.cpp's GPU list and fails if unavailable. `backend()` and `device_name()` show the actual choice. Model or session load failures can trigger automatic CPU fallback; inference failures are reported.
 
 CUDA builds need the NVIDIA CUDA toolkit and its runtime libraries. CMake locates them through its normal toolkit search, including `CUDAToolkit_ROOT` or `CUDA_PATH` for a nonstandard installation. The [`tafrigh-transcribe`](../crates/tafrigh-transcribe) package bundles the pinned native source, Rust bindings and local CUDA patches; ordinary builds need no separate transcribe.cpp installation. It also supplies the CUDA runtime, cuBLAS and driver link dependencies omitted by the upstream static-library manifest. Cross-compilation and custom static CUDA-runtime configurations are not validated.
 
@@ -316,7 +332,7 @@ YouTube validation, track selection, JSON3 parsing and word timings live in `taf
 
 | Crate | What it is |
 |---|---|
-| [`tafrigh`](https://crates.io/crates/tafrigh) | the core: decoding, Silero VAD, chunking, output formats |
+| [`tafrigh`](https://crates.io/crates/tafrigh) | the core: decoding, Silero and FireRed VAD, chunking, output formats |
 | [`tafrigh-wit`](https://crates.io/crates/tafrigh-wit) | the Wit.ai recognizer |
 | [`tafrigh-cohere`](../crates/tafrigh-cohere) | local Cohere Transcribe Arabic through transcribe.cpp |
 | [`tafrigh-transcribe`](../crates/tafrigh-transcribe) | pinned native runtime and bindings with local CUDA fixes |
@@ -348,5 +364,7 @@ sh scripts/cli-docs.sh
 The script uses the official [Usage CLI generators](https://usage.jdx.dev/cli/) with the version pinned in `mise.toml`. CI installs the same pin and checks that the committed reference matches the current parser.
 
 The Silero test fixtures are committed. To regenerate them, see [`generate.py`](../crates/tafrigh/tests/fixtures/generate.py).
+
+FireRed feature, probability, and timestamp fixtures also come from the official Python code; see [fixture provenance and regeneration](../crates/tafrigh/tests/fixtures/firered/README.md). The `silero` and `firered` library features are both enabled by default and can be selected independently with `default-features = false`. Both use the same timestamp rules; FireRed carries its model cache across pushes and resets it for each recording.
 
 For Conventional Commits, version bumps, and the release PR workflow, see [Releasing](../.github/RELEASING.md).

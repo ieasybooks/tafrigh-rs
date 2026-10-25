@@ -3,8 +3,13 @@
 //! A [`Segmenter`] is shared configuration (and model weights); each recording gets its own
 //! [`SegmentationSession`], fed incrementally so spans can be recognized while decoding continues.
 
+#[cfg(feature = "firered")]
+pub mod firered;
 #[cfg(feature = "silero")]
 pub mod silero;
+
+#[cfg(any(feature = "silero", feature = "firered"))]
+mod timestamps;
 
 use std::sync::Arc;
 use std::time::Duration;

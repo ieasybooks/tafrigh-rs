@@ -1,0 +1,123 @@
+{
+  "firered_revision": "c30ec49e8cc69642b0ee65362eba11b9d11c6e54",
+  "silero_revision": "5cd7945676eb32225748052e2e6a0580e4686a08",
+  "feature_options": "frame_opts: \nsamp_freq: 16000\nframe_shift_ms: 10\nframe_length_ms: 25\ndither: 0\npreemph_coeff: 0.97\nremove_dc_offset: 1\nwindow_type: povey\nround_to_power_of_two: 1\nblackman_coeff: 0.42\nsnip_edges: 1\n\n\nmel_opts: \nnum_bins: 80\nlow_freq: 20\nhigh_freq: 0\nvtln_low: 100\nvtln_high: -500\ndebug_mel: 0\nhtk_mode: 0\nis_librosa: 0\nnorm: slaney\nuse_slaney_mel_scale: 1\nfloor_to_int_bin: 0\n\nuse_energy: 0\nenergy_floor: 0\nraw_energy: 1\nhtk_compat: 0\nuse_log_fbank: 1\nuse_log_floor: 1\neps: 1.19209e-07\nuse_power: 1\n",
+  "cases": [
+    {
+      "name": "speech",
+      "pcm": "../short.s16le",
+      "repeat": 1,
+      "samples": 176000,
+      "frames": 1098,
+      "pcm_sha256": "252fca5b7c2acd89dfd4c01b27c67e7e6a6f5ab7d9973e9963732f8307a744d3",
+      "spans_15": [
+        [
+          1120,
+          43040
+        ],
+        [
+          48480,
+          73920
+        ],
+        [
+          82560,
+          126400
+        ],
+        [
+          126880,
+          176000
+        ]
+      ],
+      "spans_30": [
+        [
+          1120,
+          176000
+        ]
+      ]
+    },
+    {
+      "name": "recitation",
+      "pcm": "recitation.s16le",
+      "repeat": 1,
+      "samples": 128000,
+      "frames": 798,
+      "pcm_sha256": "be52421f12085daf74d3074a1eb8c7e379d703a8c9050f720db3105e79d1ff74",
+      "spans_15": [
+        [
+          10560,
+          77040
+        ],
+        [
+          77040,
+          128000
+        ]
+      ],
+      "spans_30": [
+        [
+          10560,
+          128000
+        ]
+      ]
+    },
+    {
+      "name": "recitation-long",
+      "pcm": "recitation.s16le",
+      "repeat": 5,
+      "samples": 640000,
+      "frames": 3998,
+      "pcm_sha256": "be52421f12085daf74d3074a1eb8c7e379d703a8c9050f720db3105e79d1ff74",
+      "spans_15": [
+        [
+          10560,
+          77040
+        ],
+        [
+          77040,
+          133440
+        ],
+        [
+          138400,
+          205040
+        ],
+        [
+          205040,
+          261440
+        ],
+        [
+          266400,
+          333040
+        ],
+        [
+          333040,
+          389440
+        ],
+        [
+          394400,
+          461040
+        ],
+        [
+          461040,
+          517440
+        ],
+        [
+          522400,
+          589040
+        ],
+        [
+          589040,
+          640000
+        ]
+      ],
+      "spans_30": [
+        [
+          10560,
+          461040
+        ],
+        [
+          461040,
+          640000
+        ]
+      ]
+    }
+  ]
+}
