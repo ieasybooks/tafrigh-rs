@@ -3,7 +3,7 @@
 - **License:** MIT
 - **Repository:** https://github.com/ieasybooks/tafrigh-rs
 
-Transcribe with Wit.ai or Cohere Transcribe Arabic, or retrieve existing YouTube captions.
+Transcribe with Wit.ai, Cohere Transcribe Arabic or Audar, or retrieve existing YouTube captions.
 
 Transcription is the default command. Use completions to set up your shell, or spec to export the CLI definition for documentation and other Usage tools.
 
@@ -40,7 +40,7 @@ tafrigh completions zsh --install
 
 - **Usage:** `tafrigh transcribe <FLAGS> <INPUT>…`
 
-Transcribe with Wit.ai or Cohere Transcribe Arabic, or retrieve existing YouTube captions.
+Transcribe with Wit.ai, Cohere Transcribe Arabic or Audar, or retrieve existing YouTube captions.
 
 Inputs can be media files, folders of media files, or URLs (videos, playlists, channels; anything yt-dlp supports). The youtube transcriber accepts only YouTube URLs and existing captions in --language; it never recognizes audio.
 
@@ -50,8 +50,8 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
 ### Flags
 - **`--transcriber <BACKEND>`** — Backend to use for the entire run. Required; no automatic switching.
 
-  **Choices:** `wit`, `cohere`, `youtube`
-- **`-l --language <LANG>`** — YouTube: required exact caption language (e.g. ar or en-US); no patterns or lists. Prefers manual captions, then original automatic captions; never translates. Wit: language of the apps; detected from the tokens when omitted. Cohere: ar (the default; also handles Arabic-English code-switching) or en.
+  **Choices:** `wit`, `cohere`, `audar`, `youtube`
+- **`-l --language <LANG>`** — YouTube: required exact caption language (e.g. ar or en-US); no patterns or lists. Prefers manual captions, then original automatic captions; never translates. Wit: language of the apps; detected from the tokens when omitted. Cohere: ar (the default; also handles Arabic-English code-switching) or en. Audar: ar (Arabic, the only supported language).
 - **`-r --recursive`** — Include media in subdirectories. Directory symlinks are not followed.
 - **`-q --quiet`** — Hide progress bars.
 - **`-v --verbose`** — More logging (-v debug, -vv trace). RUST_LOG overrides.
@@ -83,8 +83,8 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
   **Choices:** `silero`, `firered`, `none`
 
   **Default:** `silero`
-- **`--max-chunk <SECONDS>`** — Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohere]. Wit allows up to 60 on dictation and 20 on speech, Cohere up to 31, padding included. Longer Cohere chunks can silently lose text. With the default --pad 0.5, use at most 30.
-- **`--merge`** — Merge consecutive speech up to --max-chunk: fewer requests and more context per request [default: on for cohere, off for wit]. Wit segments still follow its utterances; Cohere gives one segment per chunk.
+- **`--max-chunk <SECONDS>`** — Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohere, 29 for audar]. Including padding: Wit allows up to 60 on dictation and 20 on speech, Cohere 31, Audar 30. With the default --pad 0.5, use at most 30 for Cohere or 29 for Audar.
+- **`--merge`** — Merge consecutive speech up to --max-chunk: fewer requests and more context per request [default: on for cohere and audar, off for wit]. Wit segments still follow its utterances; local recognizers give one segment per chunk.
 - **`--vad-threshold <P>`** — Speech probability threshold [default: 0.15 for silero, 0.4 for firered]; speech ends below this minus 0.15 (at least 0.01). At 0.5, Silero misses much melodic recitation.
 - **`--min-speech-ms <MS>`** — Shortest speech kept, in milliseconds.
 
@@ -138,14 +138,13 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
   **Default:** `20240304`
 
 ### Local models
-- **`--model <MODEL>`** — Cohere variant to download on first use (bf16, f16, q8_0, q6_k, q5_k_m or q4_k_m), or a local .gguf file.
-
-  **Default:** `q8_0`
+- **`--model <VARIANT|FILE>`** — Model variant or local .gguf decoder file. Cohere: bf16, f16, q8_0 (default), q6_k, q5_k_m or q4_k_m. Audar: turbo-q8_0 (default), turbo-q4_k_m, turbo-bf16, flash-q8_0, flash-q4_k_m or flash-bf16. Local Audar files require --audar-mmproj.
+- **`--audar-mmproj <FILE>`** — BF16 Audar audio encoder .gguf file, required only with a local --model decoder. Named variants download their matching encoder automatically.
 - **`--device <DEVICE>`** — Where the model runs: auto (this build's GPU when it works, otherwise the CPU), cpu, gpu (fail without one), or gpu:N for the Nth GPU, counting from 0.
 
   **Default:** `auto`
 - **`--cohere-batch-size <N>`** — Maximum chunks in a Cohere GPU batch (1–64; default 8). CPU processes one at a time.
-- **`--threads <N>`** — Native inference threads, at most the available CPU parallelism and 512. Omitted or 0: GPU uses available CPUs minus two (at least one); CPU uses at most eight.
+- **`--threads <N>`** — Native inference threads, at most the available CPU parallelism and 512. Omitted or 0: Cohere GPU uses available CPUs minus two (at least one), CPU at most eight. Audar uses all available CPUs for decoding, prefill and audio encoding.
 - **`--model-dir <DIR>`** — Where downloaded models are kept [default: tafrigh/models in the user cache folder, such as ~/.cache/tafrigh/models on Linux or ~/Library/Caches/tafrigh/models on macOS].
 
 ### Downloads and tools
@@ -157,7 +156,7 @@ Inputs can be media files, folders of media files, or URLs (videos, playlists, c
   **Default:** `yt-dlp`
 
   **Environment Variable:** `TAFRIGH_YT_DLP`
-- **`--ffmpeg <PATH>`** — ffmpeg executable (required with --transcriber wit or cohere).
+- **`--ffmpeg <PATH>`** — ffmpeg executable (required with --transcriber wit, cohere or audar).
 
   **Default:** `ffmpeg`
 
@@ -198,13 +197,19 @@ Transcribe on this machine with Cohere Transcribe Arabic
 tafrigh transcribe lecture.mp3 --transcriber cohere -f srt,txt
 ```
 
+Transcribe Arabic on this machine with Audar-ASR V1
+
+```
+tafrigh transcribe lecture.mp3 --transcriber audar -f srt,txt
+```
+
 Retrieve existing Arabic captions
 
 ```
 tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID --transcriber youtube --language ar
 ```
 
-Wit requires ffmpeg and Wit tokens. Cohere requires ffmpeg and downloads its model on first use.
+Wit requires ffmpeg and Wit tokens. Cohere and Audar require ffmpeg and download their models on first use.
 YouTube captions require yt-dlp, without audio processing.
 URLs require yt-dlp; YouTube may also need a JavaScript runtime such as Deno.
 

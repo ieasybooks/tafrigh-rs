@@ -20,14 +20,17 @@ doc = false
 ## `--transcriber cohere`: Cohere Transcribe Arabic on this machine. Building it needs CMake and a
 ## C++ compiler.
 cohere = ["dep:tafrigh-cohere"]
-## Cohere on NVIDIA GPUs. Building it also needs the CUDA toolkit.
-cuda = ["cohere", "tafrigh-cohere/cuda"]
+## Audar-ASR V1 Turbo and Flash; requires CMake, a C++ compiler and libclang.
+audar = ["dep:tafrigh-audar"]
+## Local recognizers on NVIDIA GPUs. Building it also needs the CUDA toolkit.
+cuda = ["cohere", "tafrigh-cohere/cuda", "tafrigh-audar?/cuda"]
 
 [dependencies]
 tafrigh = { path = "crates/tafrigh", version = "0.4.0" }
 tafrigh-wit = { path = "crates/tafrigh-wit", version = "0.4.0" }
 tafrigh-youtube = { path = "crates/tafrigh-youtube", version = "0.4.0" }
 tafrigh-cohere = { path = "crates/tafrigh-cohere", version = "0.4.0", optional = true }
+tafrigh-audar = { path = "crates/tafrigh-audar", version = "0.4.0", optional = true }
 anyhow.workspace = true
 indicatif.workspace = true
 shell-words.workspace = true

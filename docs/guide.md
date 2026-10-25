@@ -14,7 +14,7 @@ tafrigh "https://www.youtube.com/watch?v=…" --transcriber youtube --language a
 
 ## YouTube captions
 
-Every transcription command requires `--transcriber wit` or `--transcriber youtube`. YouTube retrieves existing captions through yt-dlp and requires `--language` with one exact language code, such as `ar` or `en-US`. It accepts YouTube video, playlist and channel URLs. It does not require Wit tokens, ffmpeg or Silero, and does not download audio.
+Every transcription command requires an explicit backend: `--transcriber wit`, `cohere`, `audar` or `youtube`. YouTube retrieves existing captions through yt-dlp and requires `--language` with one exact language code, such as `ar` or `en-US`. It accepts YouTube video, playlist and channel URLs. It does not require Wit tokens, ffmpeg or Silero, and does not download audio.
 
 ```sh
 tafrigh "https://www.youtube.com/watch?v=…" --transcriber youtube --language ar -f txt,srt
@@ -84,6 +84,91 @@ Both CUDA archives include native code for Turing, Ampere, Ada, Hopper and Black
 - Punctuation is always on.
 - A chunk, padding included, must be at most 31 s: with the default `--pad 0.5` on each side, `--max-chunk` must be at most 30. Longer inputs can silently omit speech even though transcribe.cpp advertises a 400 s encoder capacity ([upstream issue](https://github.com/handy-computer/transcribe.cpp/issues/128)). tafrigh rejects settings that exceed this limit before loading a model; reduce `--max-chunk` or `--pad`. Long recordings still work: tafrigh splits them into supported chunks.
 - The model can invent text for silence and noise. Speech detection removes them, so avoid `--vad none` on noisy recordings.
+
+## Audar-ASR V1
+
+`--transcriber audar` recognizes Arabic on your machine with [Audar-ASR V1](https://github.com/AudarAI/Audar-ASR-V1). Select Turbo for the better measured accuracy or Flash for smaller model files. Arabic is the only supported language (`--language ar` is optional). The backend needs ffmpeg and both a decoder and its BF16 audio encoder.
+
+Build with `cargo install tafrigh-cli --locked --features audar`, or `--features audar,cuda` for NVIDIA GPUs. Audar builds require CMake, a C++ compiler and libclang; CUDA also needs the CUDA toolkit. Audar uses the bundled llama.cpp/mtmd runtime and shares ggml with Cohere. Release archives currently include Cohere; adding Audar to those archives is a separate change.
+
+```sh
+tafrigh lecture.mp3 --transcriber audar -f srt,txt
+tafrigh lectures/ --transcriber audar --model turbo-q4_k_m -r -o transcripts
+tafrigh lecture.mp3 --transcriber audar --model flash-q8_0 --vad firered
+```
+
+### Audar model files
+
+Named variants download the official decoder and matching BF16 `mmproj` encoder on first use. The default is `turbo-q8_0`. Turbo is pinned to revision `371428bea487c7aec82b27dc21f8d4324002e98e` of [audarai/Audar-ASR-V1-Turbo](https://huggingface.co/audarai/Audar-ASR-V1-Turbo), and Flash to `54274d39245beba38f30048128e231d4176bd91d` of [audarai/Audar-ASR-V1-Flash](https://huggingface.co/audarai/Audar-ASR-V1-Flash). Downloads check the pinned byte length and SHA-256 before publishing a cache file. Cached files of the expected size are reused without rehashing.
+
+| Variant | Decoder | Required BF16 encoder | Total download |
+| --- | ---: | ---: | ---: |
+| `turbo-q8_0` (default) | 2.165 GB | 0.642 GB | 2.807 GB |
+| `turbo-q4_k_m` | 1.282 GB | 0.642 GB | 1.924 GB |
+| `turbo-bf16` | 4.070 GB | 0.642 GB | 4.711 GB |
+| `flash-q8_0` | 0.639 GB | 0.379 GB | 1.018 GB |
+| `flash-q4_k_m` | 0.397 GB | 0.379 GB | 0.775 GB |
+| `flash-bf16` | 1.198 GB | 0.379 GB | 1.577 GB |
+
+Sizes use decimal GB and describe files, not runtime memory. Each tier shares its encoder across all three decoder variants. The cache uses `audar-asr-v1-turbo` and `audar-asr-v1-flash` subfolders inside the same platform `tafrigh/models` directory as Cohere. `--model-dir` overrides that root.
+
+For local files, supply both paths; they are used directly without copying, downloading or hash verification. The projector must match the decoder's tier. `--audar-mmproj` is only valid with a local decoder, because named variants already specify their encoder.
+
+```sh
+tafrigh lecture.mp3 --transcriber audar \
+  --model /models/Audar-ASR-V1-Turbo-Q8_0.gguf \
+  --audar-mmproj /models/mmproj-Audar-ASR-V1-Turbo.gguf
+```
+
+### Audar devices and chunks
+
+`--device auto` tries the first visible GPU and retries on CPU if loading fails; `cpu` forces CPU, and `gpu` requires a GPU. `gpu:N` selects the zero-based Nth GPU for both the decoder and the audio encoder. CUDA builds support NVIDIA GPUs and the native runtime enables Metal on Apple. The startup log shows the actual backend and device.
+
+`--threads N` sets decoder, prefill and encoder CPU threads. Omitted or zero uses available CPU parallelism, capped at 512; explicit CLI values cannot exceed those bounds. Other decoding, detection and preparation work also uses CPU threads, so this does not cap total process threads. One decoder sequence runs at a time while a separate CPU context prepares the next request's audio features. At most two requests are active or queued across all input files.
+
+Audar merges speech into source chunks of at most 29 seconds, with the default 0.5 seconds of silence on each side. The complete request must fit the 30-second encoder window; longer settings fail before model loading. For shorter cues, use `--no-merge --max-chunk 15`. Long recordings are split into these supported chunks.
+
+Each chunk produces one subtitle cue with no word timings. `--words`, `words-*` formats, `--resend-gaps`, `--cohere-batch-size` and all Wit options are errors. Silero at threshold 0.15 stays the default detector; `--vad firered` selects FireRedVAD. Recognition uses an empty system body, the Arabic assistant prefill, greedy decoding and a 440-token cap. Repetition stops keep the usable text and apply qwen-asr repetition repair; reaching the token cap prints a warning. No-speech metadata and prompt echoes produce no text.
+
+### Audar accuracy and speed
+
+The initial evaluation used 500 balanced Arabic clips, 100 from each source below, on one GTX 1660 SUPER with 6 GB VRAM. Every backend uses Silero 0.15, 29-second source chunks and 0.5-second padding per side. WER pools word edits over reference words after the documented Arabic normalization; lower is better. These results describe this corpus and hardware, not a universal model ranking.
+
+| Source | Cohere Q8_0 WER | Turbo Q8_0 WER | Turbo Q4_K_M WER | Flash Q8_0 WER |
+| --- | ---: | ---: | ---: | ---: |
+| Casablanca | 49.5905% | 55.1410% | 57.3248% | 63.1483% |
+| Common Voice | 6.8773% | 7.8067% | 10.4089% | 18.2156% |
+| FLEURS | 5.5944% | 6.7778% | 8.6068% | 12.3722% |
+| Quran Ayah Corpus | 16.8872% | 8.0156% | 9.1051% | 15.7198% |
+| SADA22 | 35.2359% | 34.0183% | 35.4642% | 46.4992% |
+| **All 500 clips** | **22.4118%** | **21.7227%** | **23.4454%** | **30.1066%** |
+
+Turbo Q8's pooled advantage concentrates on Quran clips. On the other four sources together, its WER is 25.3846%, versus Cohere's 23.8877%. Turbo Q4 uses less memory with some accuracy loss. Flash Q8 is substantially less accurate on this corpus; BF16 and Flash Q4 accuracy were not measured in this comparison.
+
+The evaluated preparation-ahead setting retains one decoder sequence, 2,048 context and logical batch positions, a 512-position microbatch, FP16 KV cache and automatic attention. The table gives medians of three fresh-process runs, including loading, audio decoding, detection, recognition and output writing. The lecture is 4,160.679 seconds and has no human transcript, so its measurements describe speed, not accuracy. Memory is sampled total device usage, including resident background memory, rather than model allocations alone.
+
+| Model | Balanced seconds | Lecture seconds | Peak device MiB, balanced / lecture |
+| --- | ---: | ---: | ---: |
+| Cohere Q8_0 | 209.192 | 149.279 | 2806 / 2986 |
+| Turbo Q8_0 | 330.723 | 354.628 | 3570 / 3570 |
+| Turbo Q4_K_M | 295.497 | 286.966 | 2880 / 2880 |
+
+Turbo Q8 takes about 1.58 times Cohere's balanced wall time and 2.38 times its lecture wall time. The selected runtime setting preserved every evaluated transcript relative to the original settings. All selected models produced zero inserted words on nine non-speech controls totaling 18.56 minutes with detection enabled; this does not measure ungated recognition of arbitrary noise. FireRed improves the long-recitation results: canonical-reference WER for Turbo Q8 falls from 37.3547% with Silero 0.15 to 12.9360%, versus Cohere's 46.3663% and 22.9651% under the same respective detectors.
+
+The integrated CLI was then checked in a combined Audar/Cohere CUDA build on the same machine, using six Audar threads and four Cohere threads with batch size eight. Three fresh processes per model and workload reproduced every raw and normalized transcript from the initial evaluation, including balanced WER of 21.7227% for Turbo Q8 and 22.4118% for Cohere. Turbo Q8 also produced empty text on all nine non-speech controls. The integration check's medians were:
+
+| Model | Balanced seconds | Lecture seconds | Peak device MiB, balanced / lecture |
+| --- | ---: | ---: | ---: |
+| Cohere Q8_0 | 212.539 | 148.533 | 2806 / 2986 |
+| Turbo Q8_0 | 322.660 | 328.030 | 3570 / 3570 |
+
+These fresh timings include startup and model loading and use the same sampling of total device memory as the initial evaluation. The machine is shared, so differences between campaigns do not isolate the effect of the implementation change.
+
+After these measurements, a repetition stop was changed to keep one copy of the repeated phrase, as Cohere does, instead of every copy decoded before the stop. On the same corpus this changed 6 of the 500 Turbo Q8 transcripts and lowered its balanced WER to 21.4766% (Casablanca 54.5041%, SADA22 33.4094%, other sources unchanged). The other figures in this section predate that change.
+
+### Audar model licenses
+
+Turbo weights use the [AudarAI Community License v1.0](https://www.audarai.com/license/audarai-community-license-v1.0/). Its model card permits research and limited commercial use for qualifying Community Entities; enterprise, large-scale and model-as-a-service use require an AudarAI Enterprise License. Flash uses the [AudarAI Open License v1.0](https://www.audarai.com/license/audarai-open-license-v1.0/), permitting commercial use, redistribution, fine-tuning and quantization while retaining the license and notices. Read the linked terms before choosing weights for a deployment. These terms are documented only; tafrigh adds no runtime license prompt or restriction. See the [third-party notes](../crates/tafrigh-audar/THIRD-PARTY-LICENSES.md) for pinned sources and code licenses.
 
 ## Inputs and outputs
 
@@ -192,7 +277,7 @@ Exit codes: `0` success, `1` error, `2` invalid arguments, `3` some items failed
 
 `--vad silero` remains the default. Use `--vad firered` for the streaming [FireRedVAD](https://github.com/FireRedTeam/FireRedVAD) model, which retains more of the Quran recitation that Silero can miss. Both run locally on the CPU in Rust, with bundled weights. `--vad none` sends fixed windows of the entire recording, including silence and noise.
 
-The default onset threshold is 0.15 for Silero and 0.4 for FireRed. `--vad-threshold`, `--min-speech-ms`, `--min-silence-ms`, `--speech-pad-ms`, and `--max-chunk` apply to the selected detector. Both use an exit threshold 0.15 below onset (at least 0.01), keep speech lasting at least 500 ms, wait for 300 ms silence, and keep 250 ms of source context on each side. `--pad` adds separate synthetic silence before recognition. Backend chunking defaults still apply: Cohere merges up to 30 s; Wit uses up to 15 s without merging.
+The default onset threshold is 0.15 for Silero and 0.4 for FireRed. `--vad-threshold`, `--min-speech-ms`, `--min-silence-ms`, `--speech-pad-ms`, and `--max-chunk` apply to the selected detector. Both use an exit threshold 0.15 below onset (at least 0.01), keep speech lasting at least 500 ms, wait for 300 ms silence, and keep 250 ms of source context on each side. `--pad` adds separate synthetic silence before recognition. Backend chunking defaults still apply: Cohere merges up to 30 s, Audar up to 29 s; Wit uses up to 15 s without merging.
 
 In the 500-clip Arabic evaluation with Cohere `q8_0` and 30 s merged chunks, this Rust FireRed implementation gave 21.44% word error rate, versus 22.33% for Silero at its default 0.15 and 24.40% at 0.5. On four long recitations FireRed scored 15.99%, versus 41.57% and 57.41% for Silero at 0.15 and 0.5. All three settings produced zero chunks on nine non-speech controls totaling about 19 minutes. FireRed recovered missing words, but some clips acquired extra words; the advantage was concentrated in difficult recitation, with ordinary-speech accuracy close to Silero at 0.15. These results use Cohere recognition and do not establish Wit accuracy or performance on sung audio.
 

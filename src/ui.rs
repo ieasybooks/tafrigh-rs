@@ -25,14 +25,14 @@ struct State {
 }
 
 /// A download's progress bar, created on its first update so cached files show nothing.
-#[cfg(feature = "cohere")]
+#[cfg(any(feature = "cohere", feature = "audar"))]
 pub struct DownloadBar {
     multi: MultiProgress,
     what: String,
     bar: std::sync::OnceLock<ProgressBar>,
 }
 
-#[cfg(feature = "cohere")]
+#[cfg(any(feature = "cohere", feature = "audar"))]
 impl DownloadBar {
     /// Shows `downloaded` of `total` bytes.
     pub fn update(&self, downloaded: u64, total: u64) {
@@ -109,7 +109,7 @@ impl Ui {
     }
 
     /// A progress bar for downloading `what`, shown once the first bytes arrive.
-    #[cfg(feature = "cohere")]
+    #[cfg(any(feature = "cohere", feature = "audar"))]
     pub fn download(&self, what: impl Into<String>) -> DownloadBar {
         DownloadBar {
             multi: self.multi.clone(),

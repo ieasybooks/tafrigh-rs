@@ -40,9 +40,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
-      # The Cohere CLI is behind a feature; check it too (on the CPU, without a model).
-      - run: cargo clippy --package tafrigh-cli --all-targets --features cohere --locked -- -D warnings
-      - run: cargo test --package tafrigh-cli --features cohere --locked
+      # Local CLI backends are behind features; check both together without model weights.
+      - run: cargo clippy --package tafrigh-cli --all-targets --features cohere,audar --locked -- -D warnings
+      - run: cargo test --package tafrigh-cli --features cohere,audar --locked
       # The native source and patches must also build from the published package layout.
       - run: cargo package --package tafrigh-transcribe --package tafrigh-llama --locked
       - name: Check generated CLI reference

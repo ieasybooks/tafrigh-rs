@@ -2300,6 +2300,7 @@ dependencies = [
  "indicatif",
  "shell-words",
  "tafrigh",
+ "tafrigh-audar",
  "tafrigh-cohere",
  "tafrigh-wit",
  "tafrigh-youtube",

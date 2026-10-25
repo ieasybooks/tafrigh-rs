@@ -11,14 +11,14 @@ use usage_rs::ValueEnum;
 
 /// Tool requirements and reusable argument-file syntax.
 const HELP_FOOTER: &str = "\
-Wit requires ffmpeg and Wit tokens. Cohere requires ffmpeg and downloads its model on first use.
+Wit requires ffmpeg and Wit tokens. Cohere and Audar require ffmpeg and download their models on first use.
 YouTube captions require yt-dlp, without audio processing.
 URLs require yt-dlp; YouTube may also need a JavaScript runtime such as Deno.
 
 Use @FILE to read options and inputs from a file of shell-style words; @@ escapes a literal @.
 Boolean transcription flags accept a --no- prefix, such as --no-merge, to override presets.";
 
-/// Transcribe with Wit.ai or Cohere Transcribe Arabic, or retrieve existing YouTube captions.
+/// Transcribe with Wit.ai, Cohere Transcribe Arabic or Audar, or retrieve existing YouTube captions.
 ///
 /// Transcription is the default command. Use completions to set up your shell, or
 /// spec to export the CLI definition for documentation and other Usage tools.
@@ -84,7 +84,7 @@ pub struct Completions {
     pub dry_run: bool,
 }
 
-/// Transcribe with Wit.ai or Cohere Transcribe Arabic, or retrieve existing YouTube captions.
+/// Transcribe with Wit.ai, Cohere Transcribe Arabic or Audar, or retrieve existing YouTube captions.
 ///
 /// Inputs can be media files, folders of media files, or URLs (videos, playlists,
 /// channels; anything yt-dlp supports). The youtube transcriber accepts only YouTube
@@ -99,6 +99,7 @@ pub struct Completions {
     example("tafrigh transcribe lectures/ --transcriber wit -r -o transcripts -f srt,txt -w TOKEN", help = "Mirror a folder of recordings"),
     example("tafrigh transcribe lecture.mp3 --transcriber wit -f srt --words -w TOKEN", help = "Include word-level subtitles"),
     example("tafrigh transcribe lecture.mp3 --transcriber cohere -f srt,txt", help = "Transcribe on this machine with Cohere Transcribe Arabic"),
+    example("tafrigh transcribe lecture.mp3 --transcriber audar -f srt,txt", help = "Transcribe Arabic on this machine with Audar-ASR V1"),
     example("tafrigh transcribe https://www.youtube.com/watch?v=VIDEO_ID --transcriber youtube --language ar", help = "Retrieve existing Arabic captions")
 )]
 pub struct Args {
@@ -114,6 +115,7 @@ pub struct Args {
     /// Prefers manual captions, then original automatic captions; never translates.
     /// Wit: language of the apps; detected from the tokens when omitted.
     /// Cohere: ar (the default; also handles Arabic-English code-switching) or en.
+    /// Audar: ar (Arabic, the only supported language).
     #[usage(short = 'l', long, value_name = "LANG")]
     pub language: Option<String>,
 
@@ -153,6 +155,8 @@ pub enum Transcriber {
     /// Recognize audio on this machine with Cohere Transcribe Arabic; requires ffmpeg and a
     /// build with the cohere feature.
     Cohere,
+    /// Recognize Arabic on this machine with Audar-ASR V1; requires ffmpeg and the audar feature.
+    Audar,
     /// Retrieve existing YouTube captions; missing captions fail the item.
     Youtube,
 }
@@ -254,15 +258,15 @@ pub struct Segmentation {
     #[usage(long, value_enum, default = "silero")]
     pub vad: Vad,
 
-    /// Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohere].
-    /// Wit allows up to 60 on dictation and 20 on speech, Cohere up to 31, padding included.
-    /// Longer Cohere chunks can silently lose text. With the default --pad 0.5, use at most 30.
+    /// Longest chunk sent for recognition, in seconds [default: 15 for wit, 30 for cohere, 29 for audar].
+    /// Including padding: Wit allows up to 60 on dictation and 20 on speech, Cohere 31, Audar 30.
+    /// With the default --pad 0.5, use at most 30 for Cohere or 29 for Audar.
     #[usage(long, value_name = "SECONDS")]
     pub max_chunk: Option<f64>,
 
     /// Merge consecutive speech up to --max-chunk: fewer requests and more context per request
-    /// [default: on for cohere, off for wit]. Wit segments still follow its utterances; Cohere
-    /// gives one segment per chunk.
+    /// [default: on for cohere and audar, off for wit]. Wit segments still follow its utterances;
+    /// local recognizers give one segment per chunk.
     #[usage(long, negate = "no-merge")]
     pub merge: bool,
 
@@ -400,10 +404,16 @@ pub enum WitEndpoint {
 /// Models that run on this machine.
 #[derive(Debug, Clone, usage_rs::Args)]
 pub struct Models {
-    /// Cohere variant to download on first use (bf16, f16, q8_0, q6_k, q5_k_m or q4_k_m), or a
-    /// local .gguf file.
-    #[usage(long, value_name = "MODEL", default = "q8_0", value_hint = usage_rs::ValueHint::FilePath)]
-    pub model: String,
+    /// Model variant or local .gguf decoder file. Cohere: bf16, f16, q8_0 (default), q6_k,
+    /// q5_k_m or q4_k_m. Audar: turbo-q8_0 (default), turbo-q4_k_m, turbo-bf16,
+    /// flash-q8_0, flash-q4_k_m or flash-bf16. Local Audar files require --audar-mmproj.
+    #[usage(long, value_name = "VARIANT|FILE", value_hint = usage_rs::ValueHint::FilePath)]
+    pub model: Option<String>,
+
+    /// BF16 Audar audio encoder .gguf file, required only with a local --model decoder.
+    /// Named variants download their matching encoder automatically.
+    #[usage(long, value_name = "FILE", value_hint = usage_rs::ValueHint::FilePath)]
+    pub audar_mmproj: Option<PathBuf>,
 
     /// Where the model runs: auto (this build's GPU when it works, otherwise the CPU), cpu,
     /// gpu (fail without one), or gpu:N for the Nth GPU, counting from 0.
@@ -415,7 +425,8 @@ pub struct Models {
     pub cohere_batch_size: Option<usize>,
 
     /// Native inference threads, at most the available CPU parallelism and 512. Omitted or 0:
-    /// GPU uses available CPUs minus two (at least one); CPU uses at most eight.
+    /// Cohere GPU uses available CPUs minus two (at least one), CPU at most eight.
+    /// Audar uses all available CPUs for decoding, prefill and audio encoding.
     #[usage(long, value_name = "N")]
     pub threads: Option<usize>,
 
@@ -444,7 +455,7 @@ pub struct Tools {
     #[usage(long, value_name = "PATH", default = "yt-dlp", value_hint = usage_rs::ValueHint::ExecutablePath, env = "TAFRIGH_YT_DLP")]
     pub yt_dlp: PathBuf,
 
-    /// ffmpeg executable (required with --transcriber wit or cohere).
+    /// ffmpeg executable (required with --transcriber wit, cohere or audar).
     #[usage(long, value_name = "PATH", default = "ffmpeg", value_hint = usage_rs::ValueHint::ExecutablePath, env = "TAFRIGH_FFMPEG")]
     pub ffmpeg: PathBuf,
 

@@ -13,6 +13,8 @@ use std::time::Duration;
 use anyhow::Context;
 use tafrigh::source::Input;
 use tafrigh::{ChunkedTranscriber, Event, Tafrigh};
+#[cfg(feature = "audar")]
+use tafrigh_audar::AudarRecognizer;
 #[cfg(feature = "cohere")]
 use tafrigh_cohere::CohereRecognizer;
 use tafrigh_wit::{WitError, WitRecognizer};
@@ -125,6 +127,29 @@ async fn start(run: Run, ui: &Ui) -> anyhow::Result<ExitCode> {
                 .with_decoder(audio.decoder);
             Tafrigh::builder(transcriber)
         }
+        #[cfg(feature = "audar")]
+        Backend::Audar(audar) => {
+            let audio = audar.audio;
+            setup::check_tools(Some(&audio.decoder), needs_ytdlp.then_some(&run.ytdlp)).await?;
+            let segmenter = audio.segmenter.build()?;
+            let model = audar.audar.model.clone();
+            let download = ui.download(format!("Audar-ASR V1 {model}"));
+            let recognizer = AudarRecognizer::load_with_progress(audar.audar, |progress| {
+                download.update(progress.downloaded, progress.total);
+            })
+            .await;
+            download.finish();
+            let recognizer = recognizer.context("setting up Audar-ASR V1")?;
+            tracing::info!(
+                "Audar-ASR V1: {model} on {} ({}), native inference threads {}",
+                recognizer.backend(),
+                recognizer.device_name(),
+                recognizer.threads()
+            );
+            let transcriber = ChunkedTranscriber::new(segmenter, recognizer, audio.chunks)?
+                .with_decoder(audio.decoder);
+            Tafrigh::builder(transcriber)
+        }
         Backend::Youtube(captions) => {
             setup::check_tools(None, Some(&run.ytdlp)).await?;
             Tafrigh::captions(captions)
@@ -154,15 +179,15 @@ async fn start(run: Run, ui: &Ui) -> anyhow::Result<ExitCode> {
 fn init_logging(verbose: u8, ui: &Ui) {
     let default = match verbose {
         0 => {
-            "warn,tafrigh=info,tafrigh_wit=info,tafrigh_cohere=info,tafrigh_youtube=info,\
+            "warn,tafrigh=info,tafrigh_wit=info,tafrigh_cohere=info,tafrigh_audar=info,tafrigh_youtube=info,\
              tafrigh_cli=info,transcribe_cpp=error"
         }
         1 => {
-            "warn,tafrigh=debug,tafrigh_wit=debug,tafrigh_cohere=debug,tafrigh_youtube=debug,\
+            "warn,tafrigh=debug,tafrigh_wit=debug,tafrigh_cohere=debug,tafrigh_audar=debug,tafrigh_youtube=debug,\
              tafrigh_cli=debug,transcribe_cpp=info"
         }
         _ => {
-            "info,tafrigh=trace,tafrigh_wit=trace,tafrigh_cohere=trace,tafrigh_youtube=trace,\
+            "info,tafrigh=trace,tafrigh_wit=trace,tafrigh_cohere=trace,tafrigh_audar=trace,tafrigh_youtube=trace,\
              tafrigh_cli=trace,transcribe_cpp=debug"
         }
     };
