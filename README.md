@@ -65,11 +65,37 @@ Manual captions take precedence over original automatic captions. Missing captio
 
 Transcripts go beside the input by default. Use `-o` for a mirrored output folder and `-r` to include subfolders. `--skip-existing` skips an item only when all requested outputs exist; existing outputs are otherwise overwritten.
 
+## Library
+
+Add the core library, a recognizer (here Wit.ai) and a Tokio runtime to an application:
+
+```sh
+cargo add tafrigh tafrigh-wit
+cargo add tokio --features macros,rt-multi-thread
+```
+
+```rust
+use tafrigh::segment::silero::{SileroConfig, SileroSegmenter};
+use tafrigh::{ChunkOptions, ChunkedTranscriber, NoProgress, Transcriber};
+use tafrigh_wit::{WitConfig, WitRecognizer};
+
+let recognizer = WitRecognizer::new(WitConfig::new(["TOKEN_A", "TOKEN_B"])).await?;
+let segmenter = SileroSegmenter::new(SileroConfig::default())?;
+let transcriber = ChunkedTranscriber::new(segmenter, recognizer, ChunkOptions::default())?;
+let segments = transcriber.transcribe("lecture.mp3".as_ref(), &NoProgress).await?;
+for segment in &segments {
+    println!("{:.1}-{:.1} {}", segment.start, segment.end, segment.text);
+}
+```
+
+`tafrigh-cohere` and `tafrigh-youtube` provide the other backends, and `tafrigh::Tafrigh::builder` turns files, folders and URLs into transcript files. See the [library guide](https://github.com/ieasybooks/tafrigh-rs/blob/main/docs/guide.md#using-it-as-a-library) and the [API documentation](https://docs.rs/tafrigh).
+
 ## Documentation
 
 - [User guide](https://github.com/ieasybooks/tafrigh-rs/blob/main/docs/guide.md): output layouts, reusable options, benchmarks, and library examples.
 - [CLI reference](docs/cli.md): every option and exit code. Also available through `tafrigh --help`.
 - [Man page](docs/tafrigh.1): included in release archives.
+- API documentation: [`tafrigh`](https://docs.rs/tafrigh), [`tafrigh-wit`](https://docs.rs/tafrigh-wit), [`tafrigh-cohere`](https://docs.rs/tafrigh-cohere) and [`tafrigh-youtube`](https://docs.rs/tafrigh-youtube).
 
 Install shell completions, then follow any printed setup instructions (replace `zsh` with your shell):
 
